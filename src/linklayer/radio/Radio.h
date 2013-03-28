@@ -71,6 +71,7 @@ class INET_API Radio : public ChannelAccess, public IPowerControl
   public:
     Radio();
     virtual ~Radio();
+    virtual int getChannel() const {return getChannelNumber();}
 
   protected:
     virtual void initialize(int stage);
@@ -156,6 +157,7 @@ class INET_API Radio : public ChannelAccess, public IPowerControl
     virtual void disablingInitialization();
     //
     double calcDistFreeSpace();
+    double calcDistDoubleRay();
 
   protected:
 	// Support of noise generators, the noise generators allow that the radio can change between  RECV <-->IDLE without to receive a frame
@@ -251,6 +253,12 @@ class INET_API Radio : public ChannelAccess, public IPowerControl
      * -85 dBm
      */
     double sensitivity;
+
+    /*
+     *  minimum signal necessary to change the channel state to RECV
+     */
+    double receptionThreshold;
+    double *receptionThresholdPtr;
     /*
      * this variable is used to disconnect the possibility of sent packets to the ChannelControl
      */

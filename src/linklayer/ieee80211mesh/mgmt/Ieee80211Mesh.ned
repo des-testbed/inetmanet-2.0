@@ -26,16 +26,13 @@ simple Ieee80211Mesh
 {
     parameters:
         @macRouting;  // Mac layer with routing protocol working in the level 2
+        string meshReactiveRoutingProtocol = default("inet.networklayer.manetrouting.DYMOUM");
         int frameCapacity = default(100);
         bool useHwmp = default(false); // If active automatically deactivate useProactive and useReactive and activate ETXEstimate
         bool useProactive = default(false);
         bool useReactive = default(true);
         bool FixNode = default(false); // used by routing protocol to indicate no mobility node
         bool UseLwMpls = default(false);
-        bool ProactiveFeedback = default(true);
-        int maxHopProactiveFeedback = default(-1); // Maximun number of hops for to use the proactive feedback, not used yet, TO-DO
-        int maxHopProactive = default(-1); // Maximun number of hops in the fix part of the network with the proactive feedback
-        int maxHopReactive = default(-1); // Maximun number of hops by the reactive part for to use the proactive feedback, not used yet, TO-DO
         double maxDelay = default(0.1);
         int maxTTL = default(32); // the same that IP
         bool ETXEstimate = default(false);
@@ -43,17 +40,28 @@ simple Ieee80211Mesh
         double GateWayAnnounceInterval @unit("s") = default(100s);
         volatile double MacBroadcastDelay @unit("s") = default(uniform(0s,0.01s));
         bool forceRelayUnit  = default(false);
- //       int Willingness = default(3); //ms
- //       int Hello_ival = default(2); // sec
- //       int Tc_ival = default(5); // sec
- //       int Mid_ival = default(5); // sec
- //       int use_mac = default(0);
+        bool floodingConfirmation = default(false);
+        // pending of remove variables
+        //         bool ProactiveFeedback = default(true);
+        //        int maxHopProactiveFeedback = default(-1); // Maximun number of hops for to use the proactive feedback, not used yet, TO-DO
+        //        int maxHopProactive = default(-1); // Maximun number of hops in the fix part of the network with the proactive feedback
+        //        int maxHopReactive = default(-1); // Maximun number of hops by the reactive part for to use the proactive feedback, not used yet, TO-DO
         bool locatorActive  = default(false);
+        double coverageArea @unit(m) = default(-1m);
+        bool inteligentForward = default(false);
+        double lifeTimeForInterface @unit(s) = default(5s);
+        string selectionCriteria @enum("Etx","MinQueue","LastUsed","MinQueueLastUsed","LastUsedMinQueue") = default("MinQueue");// if ETX active the ETX proc
         @signal[enqueuePk](type=cMessage);
         @signal[dequeuePk](type=cMessage);
         @signal[dropPkByQueue](type=cMessage);
         @signal[queueingTime](type=simtime_t; unit=s);
         @signal[dataQueueLen](type=long);  // number of stored packets
+        @signal[numHopsSignal](type=long);
+        @signal[numFixHopsSignal](type=long);
+        @statistic[numHops](title="numHops"; source=numHopsSignal; record=histogram ; interpolationmode=none);
+        @statistic[numFixHops](title="numHops fix"; source=numFixHopsSignal; record=histogram ; interpolationmode=none);        
+        @statistic[dataQueueLen](title="data queue length"; record=max,timeavg,vector; interpolationmode=sample-hold);
+        @statistic[dropPkByQueue](title="packets dropped by queue"; source=dropPkByQueue; record=count,"sum(packetBytes)","vector(packetBytes)"; interpolationmode=none);
     gates:
         input  ETXProcIn @loose;
         output ETXProcOut @loose;

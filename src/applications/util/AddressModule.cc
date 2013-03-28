@@ -20,7 +20,8 @@
 #include "NotificationBoard.h"
 #include <string.h>
 
-simsignal_t AddressModule::changeAddressSignal;
+simsignal_t AddressModule::changeAddressSignalInit;
+simsignal_t AddressModule::changeAddressSignalDelete;
 AddressModule::AddressModule()
 {
     // TODO Auto-generated constructor stub
@@ -35,7 +36,9 @@ AddressModule::~AddressModule()
     if (emitSignal)
     {
         cSimpleModule * owner = check_and_cast<cSimpleModule*> (getOwner());
-        owner->emit(changeAddressSignal,this);
+        owner->emit(changeAddressSignalDelete,this);
+        simulation.getSystemModule()->unsubscribe(changeAddressSignalDelete, this);
+        simulation.getSystemModule()->unsubscribe(changeAddressSignalInit, this);
     }
 }
 
@@ -45,11 +48,13 @@ void AddressModule::initModule(bool mode)
     cSimpleModule * owner = check_and_cast<cSimpleModule*>(getOwner());
     emitSignal = mode;
     destAddresses.clear();
+    destModuleId.clear();
 
     if (owner->hasPar("destAddresses"))
     {
         const char *token;
-        cStringTokenizer tokenizer(owner->par("destAddresses"));
+        std::string aux = owner->par("destAddresses").stdstringValue();
+        cStringTokenizer tokenizer(aux.c_str());
         if (!IPvXAddressResolver().tryResolve(owner->getParentModule()->getFullPath().c_str(), myAddress))
             return;
 
@@ -70,15 +75,24 @@ void AddressModule::initModule(bool mode)
             }
         }
     }
+
+    for (unsigned int i = 0; i < destAddresses.size(); i++)
+    {
+        destModuleId.push_back(IPvXAddressResolver().findModuleWithAddress(destAddresses[i])->getId());
+    }
+
     if (emitSignal)
     {
-        changeAddressSignal = owner->registerSignal("changeAddressSignal");
-        simulation.getSystemModule()->subscribe(changeAddressSignal, this);
+        changeAddressSignalInit = owner->registerSignal("changeAddressSignalInit");
+        changeAddressSignalDelete = owner->registerSignal("changeAddressSignalDelete");
+        simulation.getSystemModule()->subscribe(changeAddressSignalInit, this);
+        simulation.getSystemModule()->subscribe(changeAddressSignalDelete, this);
         if (simTime() > 0)
-            owner->emit(changeAddressSignal, this);
+            owner->emit(changeAddressSignalInit, this);
 
     }
     isInitialized = true;
+    index = -1;
 }
 
 IPvXAddress AddressModule::getAddress(int val)
@@ -96,21 +110,34 @@ IPvXAddress AddressModule::getAddress(int val)
 
 IPvXAddress AddressModule::choseNewAddress()
 {
+    index = -1;
     if (destAddresses.empty())
         chosedAddresses.set(IPv4Address::UNSPECIFIED_ADDRESS);
     else if (destAddresses.size() == 1)
+    {
         chosedAddresses =  destAddresses[0];
+        index = 0;
+    }
     else
     {
         int k = intrand((long)destAddresses.size());
         chosedAddresses = destAddresses[k];
+        index = k;
     }
     return chosedAddresses;
 }
 
+int AddressModule::choseNewModule()
+{
+    choseNewAddress();
+    if (index >= 0)
+        return destModuleId[index];
+    return index;
+}
+
 void AddressModule::receiveSignal(cComponent *src, simsignal_t id, cObject *obj)
 {
-    if (id != changeAddressSignal)
+    if (id != changeAddressSignalInit &&  id != changeAddressSignalDelete)
         return;
 
     if (obj == this)
@@ -118,9 +145,10 @@ void AddressModule::receiveSignal(cComponent *src, simsignal_t id, cObject *obj)
 
     // rebuild address destination table
     cSimpleModule * owner = check_and_cast<cSimpleModule*> (getOwner());
-    const char *destAddrs = owner->par("destAddresses");
-    cStringTokenizer tokenizer(destAddrs);
+    std::string aux = owner->par("destAddresses").stdstringValue();
+    cStringTokenizer tokenizer(aux.c_str());
     const char *token;
+
     IPvXAddress myAddr = IPvXAddressResolver().resolve(owner->getParentModule()->getFullPath().c_str());
     while ((token = tokenizer.nextToken()) != NULL)
     {
@@ -128,6 +156,11 @@ void AddressModule::receiveSignal(cComponent *src, simsignal_t id, cObject *obj)
             destAddresses.push_back(IPv4Address::ALLONES_ADDRESS);
         else
         {
+            if (id == changeAddressSignalDelete)
+            {
+                if (strstr(obj->getFullPath().c_str(),token) != NULL)
+                    continue;
+            }
             IPvXAddress addr = IPvXAddressResolver().resolve(token);
             if (addr != myAddr)
                 destAddresses.push_back(addr);
@@ -189,5 +222,23 @@ void AddressModule::rebuildAddressList()
     // choose other address
     chosedAddresses = choseNewAddress();
     if (emitSignal)
-        owner->emit(changeAddressSignal, this);
+        owner->emit(changeAddressSignalInit, this);
+}
+
+
+int AddressModule::getModule(int val)
+{
+    if (val == -1)
+    {
+        if (index == -1)
+            chosedAddresses = choseNewAddress();
+        if (index != -1)
+            return destModuleId[index];
+        else
+            return -1;
+    }
+
+    if (val >= 0 && val < (int)destModuleId.size())
+        return destModuleId[val];
+    throw cRuntimeError(this, "Invalid index: %i", val);
 }

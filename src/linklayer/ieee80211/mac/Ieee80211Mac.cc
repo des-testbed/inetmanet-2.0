@@ -27,6 +27,9 @@
 #include "Ieee80211eClassifier.h"
 #include "Ieee80211DataRate.h"
 
+
+// #define DISABLEERRORACK
+
 // TODO: 9.3.2.1, If there are buffered multicast or broadcast frames, the PC shall transmit these prior to any unicast frames.
 // TODO: control frames must send before
 
@@ -64,6 +67,7 @@ Ieee80211Mac::Ieee80211Mac()
     mediumStateChange = NULL;
     pendingRadioConfigMsg = NULL;
     classifier = NULL;
+    queueMode = false;
 }
 
 Ieee80211Mac::~Ieee80211Mac()
@@ -124,18 +128,17 @@ void Ieee80211Mac::initialize(int stage)
             edcCAF.push_back(catEdca);
         }
         // initialize parameters
-        // Variable to apply the fsm fix
-        fixFSM = par("fixFSM");
-        if (strcmp("b", par("opMode").stringValue())==0)
+        const char *opModeStr = par("opMode").stringValue();
+        if (strcmp("b", opModeStr)==0)
             opMode = 'b';
-        else if (strcmp("g", par("opMode").stringValue())==0)
+        else if (strcmp("g", opModeStr)==0)
             opMode = 'g';
-        else if (strcmp("a", par("opMode").stringValue())==0)
+        else if (strcmp("a", opModeStr)==0)
             opMode = 'a';
-        else if (strcmp("p", par("opMode").stringValue())==0)
+        else if (strcmp("p", opModeStr)==0)
              opMode = 'p';
         else
-            opMode = 'g';
+            throw cRuntimeError("Invalid opMode='%s'", opModeStr);
 
         PHY_HEADER_LENGTH = par("phyHeaderLength"); //26us
 
@@ -247,143 +250,34 @@ void Ieee80211Mac::initialize(int stage)
         EV<<" slotTime="<<ST*1e6<<"us DIFS="<< getDIFS()*1e6<<"us";
 
         basicBitrate = par("basicBitrate");
-        if (basicBitrate==-1)
-            basicBitrate = 1e6; //1Mbps
-        EV<<" basicBitrate="<<basicBitrate/1e6<<"M";
-
         bitrate = par("bitrate");
-        if (bitrate==-1)
-            bitrate = 11e6; //11Mbps
-        EV<<" bitrate="<<bitrate/1e6<<"M IDLE="<<IDLE<<" RECEIVE="<<RECEIVE<<endl;
-
         duplicateDetect = par("duplicateDetectionFilter");
         purgeOldTuples = par("purgeOldTuples");
         duplicateTimeOut = par("duplicateTimeOut");
         lastTimeDelete = 0;
 
-        // Auto rate code
-        bool found = false;
-        if (opMode == 'b')
+        if (bitrate == -1)
         {
-            rateIndex = 0;
-            for (int i = 0; i < getMaxBitrate(); i++)
-            {
-                if (bitrate == BITRATES_80211b[i])
-                {
-                    found = true;
-                    rateIndex = i;
-                    break;
-                }
-            }
-            if (!found)
-            {
-                bitrate = BITRATES_80211b[getMaxBitrate()-1];
-                rateIndex = getMaxBitrate()-1;
-            }
-            found = false;
-            for (int i = 0; i < getMaxBitrate(); i++)
-            {
-                if (basicBitrate == BITRATES_80211b[i])
-                {
-                    found = true;
-                    break;
-                }
-            }
-            if (!found)
-                basicBitrate = BITRATES_80211b[0];
+            rateIndex = Ieee80211Descriptor::getMaxIdx(opMode);
+            bitrate = Ieee80211Descriptor::getDescriptor(rateIndex).bitrate;
+        }
+        else
+            rateIndex = Ieee80211Descriptor::getIdx(opMode, bitrate);
 
-        }
-        else if (opMode == 'g')
+        if (basicBitrate == -1)
         {
-            rateIndex = 0;
-            for (int i = 0; i < getMaxBitrate(); i++)
-            {
-                if (bitrate == BITRATES_80211g[i])
-                {
-                    found = true;
-                    rateIndex = i;
-                    break;
-                }
-            }
-            if (!found)
-            {
-                bitrate = BITRATES_80211g[getMaxBitrate()-1];
-                rateIndex = getMaxBitrate()-1;
-            }
-            found = false;
-            for (int i = 0; i < getMaxBitrate(); i++)
-            {
-                if (basicBitrate == BITRATES_80211g[i])
-                {
-                    found = true;
-                    break;
-                }
-            }
-            if (!found)
-                basicBitrate = BITRATES_80211g[0];
+            int basicBitrateIdx = Ieee80211Descriptor::getMaxIdx(opMode);
+            basicBitrate = Ieee80211Descriptor::getDescriptor(basicBitrateIdx).bitrate;
         }
-        else if (opMode == 'a')
-        {
-            rateIndex = 0;
-            for (int i = 0; i < getMaxBitrate(); i++)
-            {
-                if (bitrate == BITRATES_80211a[i])
-                {
-                    found = true;
-                    rateIndex = i;
-                    break;
-                }
-            }
-            if (!found)
-            {
-                bitrate = BITRATES_80211a[getMaxBitrate()-1];
-                rateIndex = getMaxBitrate()-1;
-            }
-            found = false;
-            for (int i = 0; i < getMaxBitrate(); i++)
-            {
-                if (basicBitrate == BITRATES_80211a[i])
-                {
-                    found = true;
-                    break;
-                }
-            }
-            if (!found)
-                basicBitrate = BITRATES_80211a[0];
-        }
-        else if (opMode == 'p')
-        {
-            rateIndex = 0;
-            for (int i = 0; i < getMaxBitrate(); i++)
-            {
-                if (bitrate == BITRATES_80211p[i])
-                {
-                    found = true;
-                    rateIndex = i;
-                    break;
-                }
-            }
-            if (!found)
-            {
-                bitrate = BITRATES_80211p[getMaxBitrate()-1];
-                rateIndex = getMaxBitrate()-1;
-            }
-            found = false;
-            for (int i = 0; i < getMaxBitrate(); i++)
-            {
-                if (basicBitrate == BITRATES_80211p[i])
-                {
-                    found = true;
-                    break;
-                }
-            }
-            if (!found)
-                basicBitrate = BITRATES_80211p[0];
-        }
+        else
+            Ieee80211Descriptor::getIdx(opMode, basicBitrate);
+
+        EV<<" basicBitrate="<<basicBitrate/1e6<<"M";
+        EV<<" bitrate="<<bitrate/1e6<<"M IDLE="<<IDLE<<" RECEIVE="<<RECEIVE<<endl;
 
         // configure AutoBit Rate
         configureAutoBitRate();
-//end auto rate code
+        //end auto rate code
         EV<<" bitrate="<<bitrate/1e6<<"M IDLE="<<IDLE<<" RECEIVE="<<RECEIVE<<endl;
 
         const char *addressString = par("address");
@@ -573,7 +467,7 @@ void Ieee80211Mac::configureAutoBitRate()
         EV<<"MAC Transmission algorithm : AARF Rate"  <<endl;
         break;
     default:
-        rateControlMode = RATE_CR;
+        throw cRuntimeError("Invalid autoBitrate parameter: '%d'", autoBitrate);
         break;
     }
 }
@@ -737,7 +631,7 @@ void Ieee80211Mac::handleSelfMsg(cMessage *msg)
 
 void Ieee80211Mac::handleUpperMsg(cPacket *msg)
 {
-    if (queueModule && numCategories()>1 && (int)transmissionQueueSize() < maxQueueSize)
+    if (queueModule && ((numCategories()>1 && (int)transmissionQueueSize() < maxQueueSize) || (queueMode  && (int)transmissionQueueSize() < maxQueueSize)))
     {
         // the module are continuously asking for packets, except if the queue is full
         EV << "requesting another frame from queue module\n";
@@ -922,13 +816,13 @@ void Ieee80211Mac::handleLowerMsg(cPacket *msg)
     Radio80211aControlInfo * cinfo = dynamic_cast<Radio80211aControlInfo *>(msg->getControlInfo());
     if (cinfo && cinfo->getAirtimeMetric())
     {
-    	double rtsTime = 0;
-    	if (rtsThreshold*8<cinfo->getTestFrameSize())
+        double rtsTime = 0;
+        if (rtsThreshold*8<cinfo->getTestFrameSize())
              rtsTime=  computeFrameDuration(LENGTH_CTS, basicBitrate) +computeFrameDuration(LENGTH_RTS, basicBitrate);
         double frameDuration = cinfo->getTestFrameDuration() + computeFrameDuration(LENGTH_ACK, basicBitrate)+rtsTime;
-    	cinfo->setTestFrameDuration(frameDuration);
+        cinfo->setTestFrameDuration(frameDuration);
     }
-    nb->fireChangeNotification(NF_LINK_FULL_PROMISCUOUS, msg);
+    sendNotification(NF_LINK_FULL_PROMISCUOUS, msg);
     validRecMode = false;
     if (msg->getControlInfo() && dynamic_cast<Radio80211aControlInfo *>(msg->getControlInfo()))
     {
@@ -1000,7 +894,7 @@ void Ieee80211Mac::handleLowerMsg(cPacket *msg)
 #ifdef LWMPLS
     int msgKind = msg->getKind();
     if (msgKind != COLLISION && msgKind != BITERROR && twoAddressFrame!=NULL)
-        nb->fireChangeNotification(NF_LINK_REFRESH, twoAddressFrame);
+        sendNotification(NF_LINK_REFRESH, twoAddressFrame);
 #endif
 
     handleWithFSM(msg);
@@ -1018,7 +912,7 @@ void Ieee80211Mac::receiveChangeNotification(int category, const cObject *detail
 
     if (category == NF_RADIOSTATE_CHANGED)
     {
-        RadioState * rstate = check_and_cast<RadioState *>(details);
+        const RadioState * rstate = check_and_cast<const RadioState *>(details);
         if (rstate->getRadioId()!=getRadioModuleId())
             return;
 
@@ -1073,9 +967,11 @@ void Ieee80211Mac::handleWithFSM(cMessage *msg)
     logState();
     stateVector.record(fsm.getState());
 
+    bool receptionError = false;
     if (frame && isLowerMsg(frame))
     {
         lastReceiveFailed = (msgKind == COLLISION || msgKind == BITERROR);
+        receptionError = (msgKind == COLLISION || msgKind == BITERROR);
         scheduleReservePeriod(frame);
     }
 
@@ -1319,6 +1215,26 @@ void Ieee80211Mac::handleWithFSM(cMessage *msg)
         FSMA_State(WAITACK)
         {
             FSMA_Enter(scheduleDataTimeoutPeriod(getCurrentTransmission()));
+#ifndef DISABLEERRORACK
+            FSMA_Event_Transition(Reception-ACK-failed,
+                                  isLowerMsg(msg) && receptionError && retryCounter(oldcurrentAC) == transmissionLimit - 1,
+                                  IDLE,
+                                  currentAC=oldcurrentAC;
+                                  cancelTimeoutPeriod();
+                                  giveUpCurrentTransmission();
+                                  txop = false;
+                                  if (endTXOP->isScheduled()) cancelEvent(endTXOP);
+                                 );
+            FSMA_Event_Transition(Reception-ACK-error,
+                                  isLowerMsg(msg) && receptionError,
+                                  DEFER,
+                                  currentAC=oldcurrentAC;
+                                  cancelTimeoutPeriod();
+                                  retryCurrentTransmission();
+                                  txop = false;
+                                  if (endTXOP->isScheduled()) cancelEvent(endTXOP);
+                                 );
+#endif
             FSMA_Event_Transition(Receive-ACK-TXOP,
                                   isLowerMsg(msg) && isForUs(frame) && frameType == ST_ACK && txop,
                                   WAITSIFS,
@@ -1403,6 +1319,7 @@ void Ieee80211Mac::handleWithFSM(cMessage *msg)
                                   isLowerMsg(msg) && retryCounter(oldcurrentAC) == transmissionLimit - 1,
                                   RECEIVE,
                                   currentAC=oldcurrentAC;
+                                  cancelTimeoutPeriod();
                                   giveUpCurrentTransmission();
                                   txop = false;
                                   if (endTXOP->isScheduled()) cancelEvent(endTXOP);
@@ -1411,6 +1328,7 @@ void Ieee80211Mac::handleWithFSM(cMessage *msg)
                                  isLowerMsg(msg),
                                  RECEIVE,
                                  currentAC=oldcurrentAC;
+                                 cancelTimeoutPeriod();
                                  retryCurrentTransmission();
                                  txop = false;
                                  if (endTXOP->isScheduled()) cancelEvent(endTXOP);
@@ -1446,6 +1364,22 @@ void Ieee80211Mac::handleWithFSM(cMessage *msg)
         FSMA_State(WAITCTS)
         {
             FSMA_Enter(scheduleCTSTimeoutPeriod());
+#ifndef DISABLEERRORACK
+            FSMA_Event_Transition(Reception-CTS-Failed,
+                                   isLowerMsg(msg) && receptionError && retryCounter(oldcurrentAC) == transmissionLimit - 1,
+                                   IDLE,
+                                   cancelTimeoutPeriod();
+                                   currentAC = oldcurrentAC;
+                                   giveUpCurrentTransmission();
+                                  );
+            FSMA_Event_Transition(Reception-CTS-error,
+                                   isLowerMsg(msg) && receptionError,
+                                   DEFER,
+                                   cancelTimeoutPeriod();
+                                   currentAC = oldcurrentAC;
+                                   retryCurrentTransmission();
+                                  );
+#endif
             FSMA_Event_Transition(Receive-CTS,
                                   isLowerMsg(msg) && isForUs(frame) && frameType == ST_CTS,
                                   WAITSIFS,
@@ -1477,10 +1411,7 @@ void Ieee80211Mac::handleWithFSM(cMessage *msg)
                                   msg == endSIFS && getFrameReceivedBeforeSIFS()->getType() == ST_RTS,
                                   IDLE,
                                   sendCTSFrameOnEndSIFS();
-                                  if (fixFSM)
-                                      finishReception();
-                                  else
-                                      resetStateVariables();
+                                  finishReception();
                                   );
             FSMA_Event_Transition(Transmit-DATA,
                                   msg == endSIFS && getFrameReceivedBeforeSIFS()->getType() == ST_CTS,
@@ -1492,10 +1423,7 @@ void Ieee80211Mac::handleWithFSM(cMessage *msg)
                                   msg == endSIFS && isDataOrMgmtFrame(getFrameReceivedBeforeSIFS()),
                                   IDLE,
                                   sendACKFrameOnEndSIFS();
-                                  if (fixFSM)
-                                      finishReception();
-                                  else
-                                      resetStateVariables();
+                                  finishReception();
                                    );
         }
         // this is not a real state
@@ -1506,20 +1434,14 @@ void Ieee80211Mac::handleWithFSM(cMessage *msg)
                                      IDLE,
                                      EV << "received frame contains bit errors or collision, next wait period is EIFS\n";
                                      numCollision++;
-                                     if (fixFSM)
-                                         finishReception();
-                                     else
-                                         resetStateVariables();
+                                     finishReception();
                                      );
             FSMA_No_Event_Transition(Immediate-Receive-Multicast,
                                      isLowerMsg(msg) && isMulticast(frame) && !isSentByUs(frame) && isDataOrMgmtFrame(frame),
                                      IDLE,
                                      sendUp(frame);
                                      numReceivedMulticast++;
-                                     if (fixFSM)
-                                         finishReception();
-                                     else
-                                         resetStateVariables();
+                                     finishReception();
                                      );
             FSMA_No_Event_Transition(Immediate-Receive-Data,
                                      isLowerMsg(msg) && isForUs(frame) && isDataOrMgmtFrame(frame),
@@ -1540,19 +1462,13 @@ void Ieee80211Mac::handleWithFSM(cMessage *msg)
                                      isLowerMsg(msg) && !isForUs(frame) && isDataOrMgmtFrame(frame),
                                      IDLE,
                                      promiscousFrame(frame);
-                                     if (fixFSM)
-                                         finishReception();
-                                     else
-                                         resetStateVariables();
+                                     finishReception();
                                      numReceivedOther++;
                                      );
             FSMA_No_Event_Transition(Immediate-Receive-Other,
                                      isLowerMsg(msg),
                                      IDLE,
-                                     if (fixFSM)
-                                         finishReception();
-                                     else
-                                         resetStateVariables();
+                                     finishReception();
                                      numReceivedOther++;
                                      );
         }
@@ -1599,14 +1515,7 @@ simtime_t Ieee80211Mac::getSIFS()
     if (useModulationParameters)
     {
         ModulationType modType;
-        if ((opMode=='b') || (opMode=='g'))
-            modType = WifiModulationType::getMode80211g(bitrate);
-        else if (opMode=='a')
-            modType = WifiModulationType::getMode80211a(bitrate);
-        else if (opMode=='p')
-            modType = WifiModulationType::getMode80211p(bitrate);
-        else
-            opp_error("mode not supported");
+        modType = WifiModulationType::getModulationType(opMode, bitrate);
         return WifiModulationType::getSifsTime(modType,wifiPreambleType);
     }
 
@@ -1619,14 +1528,7 @@ simtime_t Ieee80211Mac::getSlotTime()
     if (useModulationParameters)
     {
         ModulationType modType;
-        if ((opMode=='b') || (opMode=='g'))
-            modType = WifiModulationType::getMode80211g(bitrate);
-        else if (opMode=='a')
-            modType = WifiModulationType::getMode80211a(bitrate);
-        else if (opMode=='p')
-            modType = WifiModulationType::getMode80211p(bitrate);
-        else
-            opp_error("mode not supported");
+        modType = WifiModulationType::getModulationType(opMode, bitrate);
         return WifiModulationType::getSlotDuration(modType,wifiPreambleType);
     }
     return ST;
@@ -1656,14 +1558,7 @@ simtime_t Ieee80211Mac::getDIFS(int category)
 simtime_t Ieee80211Mac::getHeaderTime(double bitrate)
 {
     ModulationType modType;
-    if ((opMode=='b') || (opMode=='g'))
-        modType = WifiModulationType::getMode80211g(bitrate);
-    else if (opMode=='a')
-        modType = WifiModulationType::getMode80211a(bitrate);
-    else if (opMode=='p')
-        modType = WifiModulationType::getMode80211p(bitrate);
-    else
-        opp_error("mode not supported");
+    modType = WifiModulationType::getModulationType(opMode, bitrate);
     return WifiModulationType::getPreambleAndHeader(modType, wifiPreambleType);
 }
 
@@ -1687,7 +1582,7 @@ simtime_t Ieee80211Mac::getEIFS()
     else
     {
         // FIXME: check how PHY_HEADER_LENGTH is handled. Is that given in bytes or secs ???
-        // what is the rela unit? The use seems to be incosistent betwen b and g modes.
+        // what is the real unit? The use seems to be incosistent betwen b and g modes.
         if (opMode=='b')
             return getSIFS() + getDIFS() + (8 * LENGTH_ACK + PHY_HEADER_LENGTH) / 1E+6;
         else if (opMode=='g')
@@ -1825,14 +1720,7 @@ void Ieee80211Mac::scheduleDataTimeoutPeriod(Ieee80211DataOrMgmtFrame *frameToSe
         if (useModulationParameters)
         {
             ModulationType modType;
-            if ((opMode=='b') || (opMode=='g'))
-                modType = WifiModulationType::getMode80211g(bitRate);
-            else if (opMode=='a')
-                modType = WifiModulationType::getMode80211a(bitRate);
-            else if (opMode=='p')
-                modType = WifiModulationType::getMode80211p(bitRate);
-            else
-                opp_error("mode not supported");
+            modType = WifiModulationType::getModulationType(opMode, bitRate);
             WifiModulationType::getSlotDuration(modType,wifiPreambleType);
             tim = computeFrameDuration(frameToSend) +SIMTIME_DBL(
                  WifiModulationType::getSlotDuration(modType,wifiPreambleType) +
@@ -1858,7 +1746,8 @@ void Ieee80211Mac::scheduleMulticastTimeoutPeriod(Ieee80211DataOrMgmtFrame *fram
 void Ieee80211Mac::cancelTimeoutPeriod()
 {
     EV << "canceling timeout period\n";
-    cancelEvent(endTimeout);
+    if (endTimeout->isScheduled())
+        cancelEvent(endTimeout);
 }
 
 void Ieee80211Mac::scheduleCTSTimeoutPeriod()
@@ -2242,7 +2131,7 @@ void Ieee80211Mac::finishCurrentTransmission()
 void Ieee80211Mac::giveUpCurrentTransmission()
 {
     Ieee80211DataOrMgmtFrame *temp = (Ieee80211DataOrMgmtFrame*) transmissionQueue()->front();
-    nb->fireChangeNotification(NF_LINK_BREAK, temp);
+    sendNotification(NF_LINK_BREAK, temp);
     popTransmissionQueue();
     resetStateVariables();
     numGivenUp()++;
@@ -2407,18 +2296,13 @@ double Ieee80211Mac::computeFrameDuration(int bits, double bitrate)
     if (PHY_HEADER_LENGTH<0)
     {
         ModulationType modType;
-        if (opMode=='g' || (opMode=='b'))
-            modType = WifiModulationType::getMode80211g(bitrate);
-        else if (opMode=='a')
-            modType = WifiModulationType::getMode80211a(bitrate);
-        else if (opMode=='p')
-            modType = WifiModulationType::getMode80211p(bitrate);
-        else
-            opp_error("Opmode not supported");
+        modType = WifiModulationType::getModulationType(opMode, bitrate);
         duration = SIMTIME_DBL(WifiModulationType::calculateTxDuration(bits, modType, wifiPreambleType));
     }
     else
     {
+        // FIXME: check how PHY_HEADER_LENGTH is handled. Is that given in bytes or secs ???
+        // what is the real unit? The use seems to be incosistent betwen b and g/a/p modes.
         if ((opMode=='g') || (opMode=='a') || (opMode=='p'))
             duration = 4*ceil((16+bits+6)/(bitrate/1e6*4))*1e-6 + PHY_HEADER_LENGTH;
         else if (opMode=='b')
@@ -2503,8 +2387,8 @@ bool Ieee80211Mac::transmissionQueueEmpty()
 unsigned int Ieee80211Mac::transmissionQueueSize()
 {
     unsigned int totalSize=0;
-	for (int i=0; i<numCategories(); i++)
-	    totalSize+=transmissionQueue(i)->size();
+    for (int i=0; i<numCategories(); i++)
+        totalSize+=transmissionQueue(i)->size();
     return totalSize;
 }
 
@@ -2517,17 +2401,9 @@ void Ieee80211Mac::reportDataOk()
     failedCounter = 0;
     recovery = false;
     if ((successCounter == getSuccessThreshold() || timer == getTimerTimeout())
-            && (rateIndex+1 < (getMaxBitrate())))
+            && Ieee80211Descriptor::incIdx(rateIndex))
     {
-        if (rateControlMode != RATE_CR)
-        {
-            rateIndex++;
-            if (opMode=='b') setBitrate(BITRATES_80211b[rateIndex]);
-            else if (opMode=='g') setBitrate(BITRATES_80211g[rateIndex]);
-            else if (opMode=='a') setBitrate(BITRATES_80211a[rateIndex]);
-            else if (opMode=='p') setBitrate(BITRATES_80211p[rateIndex]);
-            else opp_error("mode not supported");
-        }
+        setBitrate(Ieee80211Descriptor::getDescriptor(rateIndex).bitrate);
         timer = 0;
         successCounter = 0;
         recovery = true;
@@ -2547,15 +2423,8 @@ void Ieee80211Mac::reportDataFailed(void)
         if (retryCounter() == 1)
         {
             reportRecoveryFailure();
-            if (rateIndex != getMinBitrate() && rateControlMode != RATE_CR)
-            {
-                rateIndex--;
-                if (opMode=='b') setBitrate(BITRATES_80211b[rateIndex]);
-                else if (opMode=='g') setBitrate(BITRATES_80211g[rateIndex]);
-                else if (opMode=='a') setBitrate(BITRATES_80211a[rateIndex]);
-                else if (opMode=='p') setBitrate(BITRATES_80211p[rateIndex]);
-                else opp_error("mode not supported");
-            }
+            if (Ieee80211Descriptor::decIdx(rateIndex))
+                setBitrate(Ieee80211Descriptor::getDescriptor(rateIndex).bitrate);
         }
         timer = 0;
     }
@@ -2564,15 +2433,8 @@ void Ieee80211Mac::reportDataFailed(void)
         if (needNormalFallback())
         {
             reportFailure();
-            if (rateIndex != getMinBitrate() && rateControlMode != RATE_CR)
-            {
-                rateIndex--;
-                if (opMode=='b') setBitrate(BITRATES_80211b[rateIndex]);
-                else if (opMode=='g') setBitrate(BITRATES_80211g[rateIndex]);
-                else if (opMode=='a') setBitrate(BITRATES_80211a[rateIndex]);
-                else if (opMode=='p') setBitrate(BITRATES_80211p[rateIndex]);
-                else opp_error("mode not supported");
-            }
+            if (Ieee80211Descriptor::decIdx(rateIndex))
+                setBitrate(Ieee80211Descriptor::getDescriptor(rateIndex).bitrate);
         }
         if (retryCounter() >= 2)
         {
@@ -2667,30 +2529,6 @@ double Ieee80211Mac::getBitrate()
 void Ieee80211Mac::setBitrate(double rate)
 {
     bitrate = rate;
-}
-
-
-//FIXME rename it! suggestion: getBitrateArraySize()
-int Ieee80211Mac::getMaxBitrate(void)
-{
-    if (opMode=='b')
-        return (NUM_BITERATES_80211b);
-    else if (opMode=='g')
-        return (NUM_BITERATES_80211g);
-    else if (opMode=='a')
-        return (NUM_BITERATES_80211a);
-    else if (opMode=='p')
-        return (NUM_BITERATES_80211p);
-//
-// If arrives here there is an error
-    opp_error("Mode not supported");
-    return 0;
-}
-
-//FIXME: remove or rename it!
-int Ieee80211Mac::getMinBitrate(void)
-{
-    return 0;
 }
 
 
@@ -2939,17 +2777,12 @@ Ieee80211Mac::getControlAnswerMode(ModulationType reqMode)
    */
     bool found = false;
     ModulationType mode;
-    for (uint32_t idx = 0; idx < (uint32_t)getMaxBitrate(); idx++)
+    for (int32_t idx = Ieee80211Descriptor::getMinIdx(opMode); idx < Ieee80211Descriptor::size(); idx++)
     {
+        if (Ieee80211Descriptor::getDescriptor(idx).mode != opMode)
+            break;
         ModulationType thismode;
-        if (opMode=='b')
-            thismode = WifiModulationType::getMode80211b(BITRATES_80211b[idx]);
-        else if (opMode=='g')
-            thismode = WifiModulationType::getMode80211g(BITRATES_80211g[idx]);
-        else if (opMode=='a')
-            thismode = WifiModulationType::getMode80211a(BITRATES_80211a[idx]);
-        else if (opMode=='p')
-            thismode = WifiModulationType::getMode80211p(BITRATES_80211p[idx]);
+        thismode = WifiModulationType::getModulationType(opMode, Ieee80211Descriptor::getDescriptor(idx).bitrate);
 
       /* If the rate:
        *
@@ -3086,5 +2919,5 @@ bool Ieee80211Mac::isDuplicated(cMessage *msg)
 void Ieee80211Mac::promiscousFrame(cMessage *msg)
 {
     if (!isDuplicated(msg)) // duplicate detection filter
-        nb->fireChangeNotification(NF_LINK_PROMISCUOUS, msg);
+        sendNotification(NF_LINK_PROMISCUOUS, msg);
 }

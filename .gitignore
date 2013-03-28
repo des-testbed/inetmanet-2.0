@@ -10,6 +10,10 @@ src/Makefile.vc
 /examples/*/*/*/results/
 /tests/*/work/
 /.settings/*
+*.pcap
+*.sca
+*.vec
+*.anf
 # ignore binary files
 out/
 *.so
@@ -24,6 +28,8 @@ out/
 *.idb
 *.manifest
 .tkenvrc
+.tkenvlog
+*.out
 
 # ignore backup and temp files
 *.bak

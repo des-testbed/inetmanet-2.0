@@ -24,7 +24,7 @@
 
 #include <string.h>
 #include <assert.h>
-#include "aodv_uu_omnet.h"
+
 
 #include "UDPPacket.h"
 #include "IPv4ControlInfo.h"
@@ -40,7 +40,7 @@
 #include "IPvXAddress.h"
 #include "ControlManetRouting_m.h"
 #include "Ieee802Ctrl_m.h"
-
+#include "aodv_uu_omnet.h"
 
 const int UDP_HEADER_BYTES = 8;
 typedef std::vector<IPv4Address> IPAddressVector;
@@ -64,7 +64,7 @@ int AODVUU::totalRrepAckRec=0;
 int AODVUU::totalRerrSend=0;
 int AODVUU::totalRerrRec=0;
 #endif
-std::map<Uint128,u_int32_t *> AODVUU::mapSeqNum;
+std::map<ManetAddress,u_int32_t *> AODVUU::mapSeqNum;
 
 void NS_CLASS initialize(int stage)
 {
@@ -120,6 +120,10 @@ void NS_CLASS initialize(int stage)
         if ((bool)par("debug"))
             debug = 1;
 
+        if (hasPar("RreqDelayInReception"))
+            storeRreq = par(("RreqDelayInReception")).boolValue();
+        checkRrep = false;
+
         useIndex = par("UseIndex");
         unidir_hack = (int) par("unidir_hack");
 
@@ -145,6 +149,9 @@ void NS_CLASS initialize(int stage)
             ttl_start = TTL_START_HELLO;
             delete_period = DELETE_PERIOD_HELLO;
         }
+
+        if (hasPar("avoidDupRREP") && llfeedback)
+            checkRrep = par("avoidDupRREP").boolValue();
 
         /* Initialize common manet routing protocol structures */
         registerRoutingModule();
@@ -188,16 +195,18 @@ void NS_CLASS initialize(int stage)
             if (!isInMacLayer())
             {
                 DEV_NR(i).netmask.s_addr =
-                    getInterfaceEntry(i)->ipv4Data()->getIPAddress().getNetworkMask().getInt();
+                    ManetAddress(getInterfaceEntry(i)->ipv4Data()->getIPAddress().getNetworkMask());
                 DEV_NR(i).ipaddr.s_addr =
-                    getInterfaceEntry(i)->ipv4Data()->getIPAddress().getInt();
+                        ManetAddress(getInterfaceEntry(i)->ipv4Data()->getIPAddress());
             }
             else
             {
-                DEV_NR(i).netmask.s_addr = MACAddress::BROADCAST_ADDRESS.getInt();
-                DEV_NR(i).ipaddr.s_addr = getInterfaceEntry(i)->getMacAddress().getInt();
+                DEV_NR(i).netmask.s_addr = ManetAddress(MACAddress::BROADCAST_ADDRESS);
+                DEV_NR(i).ipaddr.s_addr = ManetAddress(getInterfaceEntry(i)->getMacAddress());
 
             }
+            if (getInterfaceEntry(i)->isLoopback())
+                continue;
             if (isInMacLayer())
             {
                 mapSeqNum[DEV_NR(i).ipaddr.s_addr] = &this_host.seqno;
@@ -208,7 +217,7 @@ void NS_CLASS initialize(int stage)
         {
             DEV_NR(getWlanInterfaceIndex(i)).enabled = 1;
             DEV_NR(getWlanInterfaceIndex(i)).sock = -1;
-            DEV_NR(getWlanInterfaceIndex(i)).broadcast.s_addr = AODV_BROADCAST;
+            DEV_NR(getWlanInterfaceIndex(i)).broadcast.s_addr = ManetAddress(IPv4Address(AODV_BROADCAST));
         }
 
         NS_DEV_NR = getWlanInterfaceIndexByAddress();
@@ -261,7 +270,6 @@ void NS_CLASS initialize(int stage)
 /* Destructor for the AODV-UU routing agent */
 NS_CLASS ~ AODVUU()
 {
-    list_t *tmp = NULL, *pos = NULL;
 #ifdef AODV_USE_STL_RT
     while (!aodvRtTableMap.empty())
     {
@@ -269,6 +277,7 @@ NS_CLASS ~ AODVUU()
         aodvRtTableMap.erase(aodvRtTableMap.begin());
     }
 #else
+    list_t *tmp = NULL, *pos = NULL;
     for (int i = 0; i < RT_TABLESIZE; i++)
     {
         list_foreach_safe(pos, tmp, &rt_tbl.tbl[i])
@@ -337,8 +346,8 @@ void NS_CLASS packetFailed(IPv4Datagram *dgram)
     rt_table_t *rt_next_hop, *rt;
     struct in_addr dest_addr, src_addr, next_hop;
 
-    src_addr.s_addr = dgram->getSrcAddress().getInt();
-    dest_addr.s_addr = dgram->getDestAddress().getInt();
+    src_addr.s_addr = ManetAddress(dgram->getSrcAddress());
+    dest_addr.s_addr = ManetAddress(dgram->getDestAddress());
 
 
     DEBUG(LOG_DEBUG, 0, "Got failure callback");
@@ -416,8 +425,8 @@ void NS_CLASS packetFailedMac(Ieee80211DataFrame *dgram)
         return;
     }
 
-    src_addr.s_addr = dgram->getAddress3().getInt();
-    dest_addr.s_addr = dgram->getAddress4().getInt();
+    src_addr.s_addr = ManetAddress(dgram->getAddress3());
+    dest_addr.s_addr = ManetAddress(dgram->getAddress4());
     if (seek_list_find(dest_addr))
     {
         DEBUG(LOG_DEBUG, 0, "Ongoing route discovery, buffering packet...");
@@ -426,10 +435,10 @@ void NS_CLASS packetFailedMac(Ieee80211DataFrame *dgram)
         return;
     }
 
-    next_hop.s_addr = dgram->getReceiverAddress().getInt();
+    next_hop.s_addr = ManetAddress(dgram->getReceiverAddress());
     if (isStaticNode() && getCollaborativeProtocol())
     {
-        Uint128 next;
+        ManetAddress next;
         int iface;
         double cost;
         if (getCollaborativeProtocol()->getNextHop(next_hop.s_addr, next, iface, cost))
@@ -496,6 +505,51 @@ void NS_CLASS handleMessage (cMessage *msg)
 
     if (is_init==false)
         opp_error ("Aodv has not been initialized ");
+
+    if (msg->isSelfMessage() && dynamic_cast<AODV_msg*> (msg))
+    {
+        DelayInfo * delayInfo = check_and_cast<DelayInfo *> (msg->removeControlInfo());
+        RREP * rrep = dynamic_cast<RREP *> (msg);
+        if (rrep)
+        {
+            if (isThisRrepPrevSent(msg))
+            {
+                delete msg;
+                msg = NULL;
+            }
+        }
+        if (msg)
+            aodv_socket_send((AODV_msg *) msg, delayInfo->dst , delayInfo->len, delayInfo->ttl, delayInfo->dev,0);
+        delete delayInfo;
+        return;
+    }
+    else if (msg->isSelfMessage() && dynamic_cast<RREQProcessed*> (msg))
+    {
+        RREQProcessed* rreqList = dynamic_cast<RREQProcessed*> (msg);
+        if (rreqList)
+        {
+            while (!rreqList->infoList.empty())
+            {
+                cPacket *pkt = rreqList->infoList.front().pkt;
+                rreqList->infoList.pop_front();
+                recvAODVUUPacket(pkt);
+            }
+        }
+        // delete rreqList from the list
+        for (std::map<PacketDestOrigin,RREQProcessed*>::iterator it = rreqProc.begin(); it != rreqProc.end(); ++it)
+        {
+            if (it->second == rreqList)
+            {
+                rreqProc.erase(it);
+                break;
+            }
+        }
+
+        delete msg;
+        scheduleNextEvent();
+        return;
+    }
+
     if (msg==sendMessageEvent)
     {
         // timer event
@@ -508,24 +562,71 @@ void NS_CLASS handleMessage (cMessage *msg)
         ControlManetRouting * control =  check_and_cast <ControlManetRouting *> (msg);
         if (control->getOptionCode()== MANET_ROUTE_NOROUTE)
         {
-            ipDgram = (IPv4Datagram*) control->decapsulate();
-            cPolymorphic * ctrl = ipDgram->removeControlInfo();
-            unsigned int ifindex = NS_IFINDEX;  /* Always use ns interface */
-            if (ctrl)
+            if (isInMacLayer())
             {
-                if (dynamic_cast<Ieee802Ctrl*> (ctrl))
+                if (control->getDestAddress().isBroadcast())
                 {
-                    Ieee802Ctrl *ieeectrl = dynamic_cast<Ieee802Ctrl*> (ctrl);
-                    Uint128 address = ieeectrl->getDest().getInt();
-                    int index = getWlanInterfaceIndexByAddress(address);
-                    if (index!=-1)
-                        ifindex = index;
+                    delete control;
+                    return;
                 }
-                delete ctrl;
-            }
+                cMessage* msgAux = control->decapsulate();
 
-            EV << "Aodv rec datagram  " << ipDgram->getName() << " with dest=" << ipDgram->getDestAddress().str() << "\n";
-            processPacket(ipDgram,ifindex);   // Data path
+                if (msgAux)
+                    processMacPacket(PK(msgAux), control->getDestAddress(), control->getSrcAddress(), NS_IFINDEX);
+                else
+                {
+                    if (!addressIsForUs(control->getSrcAddress()))
+                    {
+                        struct in_addr dest_addr;
+                        dest_addr.s_addr = control->getDestAddress();
+                        rt_table_t * fwd_rt = rt_table_find(dest_addr);
+
+                        RERR *rerr;
+                        DEBUG(LOG_DEBUG, 0,
+                                "No route, src=%s dest=%s prev_hop=%s - DROPPING!",
+                                ip_to_str(src_addr), ip_to_str(dest_addr));
+                        if (fwd_rt)
+                        {
+                            rerr = rerr_create(0, fwd_rt->dest_addr,fwd_rt->dest_seqno);
+                            rt_table_update_timeout(fwd_rt, DELETE_PERIOD);
+                        }
+                        else
+                            rerr = rerr_create(0, dest_addr, 0);
+                        struct in_addr src_addr;
+                        src_addr.s_addr = control->getSrcAddress();
+                        rt_table_t * rev_rt = rt_table_find(src_addr);
+
+                        struct in_addr rerr_dest;
+
+                        if (rev_rt && rev_rt->state == VALID)
+                            rerr_dest = rev_rt->next_hop;
+                        else
+                            rerr_dest.s_addr = ManetAddress(IPv4Address(AODV_BROADCAST));
+
+                        aodv_socket_send((AODV_msg *) rerr, rerr_dest,RERR_CALC_SIZE(rerr), 1, &DEV_IFINDEX(NS_IFINDEX));
+                    }
+                }
+            }
+            else
+            {
+                ipDgram = (IPv4Datagram*) control->decapsulate();
+                cPolymorphic * ctrl = ipDgram->removeControlInfo();
+                unsigned int ifindex = NS_IFINDEX;  /* Always use ns interface */
+                if (ctrl)
+                {
+                    if (dynamic_cast<Ieee802Ctrl*> (ctrl))
+                    {
+                        Ieee802Ctrl *ieeectrl = dynamic_cast<Ieee802Ctrl*> (ctrl);
+                        ManetAddress address(ieeectrl->getDest());
+                        int index = getWlanInterfaceIndexByAddress(address);
+                        if (index!=-1)
+                            ifindex = index;
+                    }
+                    delete ctrl;
+                }
+                EV << "Aodv rec datagram  " << ipDgram->getName() << " with dest=" << ipDgram->getDestAddress().str() << "\n";
+                processPacket(ipDgram,ifindex);   // Data path
+            }
         }
         else if (control->getOptionCode()== MANET_ROUTE_UPDATE)
         {
@@ -565,13 +666,13 @@ void NS_CLASS handleMessage (cMessage *msg)
             if (!isInMacLayer())
             {
                 IPv4ControlInfo *controlInfo = check_and_cast<IPv4ControlInfo*>(udpPacket->removeControlInfo());
-                src_addr.s_addr = controlInfo->getSrcAddr().getInt();
+                src_addr.s_addr = ManetAddress(controlInfo->getSrcAddr());
                 aodvMsg->setControlInfo(controlInfo);
             }
             else
             {
-                Ieee802Ctrl *controlInfo = check_and_cast<Ieee802Ctrl*>(udpPacket->getControlInfo());
-                src_addr.s_addr = controlInfo->getSrc().getInt();
+                Ieee802Ctrl *controlInfo = check_and_cast<Ieee802Ctrl*>(aodvMsg->getControlInfo());
+                src_addr.s_addr = ManetAddress(controlInfo->getSrc());
             }
         }
         else
@@ -600,6 +701,44 @@ void NS_CLASS handleMessage (cMessage *msg)
         aodvMsg=NULL;
         scheduleNextEvent();
         return;
+    }
+    if (storeRreq)
+    {
+        RREQInfo rreqInfo;
+        PacketDestOrigin orgDest;
+
+        if (getDestAddressRreq(aodvMsg,orgDest,rreqInfo))
+        {
+            rreqInfo.pkt = aodvMsg;
+            std::map<PacketDestOrigin,RREQProcessed*>::iterator it = rreqProc.find(orgDest);
+            if (it == rreqProc.end())
+            {
+                RREQProcessed* proc = new RREQProcessed;
+                proc->destOrigin = orgDest;
+                proc->infoList.push_back(rreqInfo);
+                rreqProc.insert(std::make_pair(orgDest,proc));
+                scheduleAt(simTime()+par("rreqWait").doubleValue(),proc);
+            }
+            else
+            {
+                // store the packet in function if the cost and seq num
+                RREQProcessed* proc = it->second;
+                std::deque<RREQInfo>::iterator it2;
+                for (it2 = proc->infoList.begin(); it2 != proc->infoList.end(); ++it2)
+                {
+                    if (((*it2).origin_seqno < rreqInfo.origin_seqno) || ((*it2).origin_seqno == rreqInfo.origin_seqno && (*it2).cost > rreqInfo.cost))
+                    {
+                        it2 = proc->infoList.insert(it2,rreqInfo);
+                        break;
+                    }
+                }
+                if (it2 == proc->infoList.end())
+                {
+                    proc->infoList.push_back(rreqInfo);
+                }
+            }
+            return;
+        }
     }
     recvAODVUUPacket(aodvMsg);
     scheduleNextEvent();
@@ -805,7 +944,7 @@ void NS_CLASS recvAODVUUPacket(cMessage * msg)
 
     AODV_msg *aodv_msg = check_and_cast<AODV_msg *> (msg);
     int len = aodv_msg->getByteLength();
-    int ifIndex=NS_IFINDEX;
+    int ifIndex = NS_IFINDEX;
 
     ttl =  aodv_msg->ttl-1;
     if (!isInMacLayer())
@@ -814,47 +953,144 @@ void NS_CLASS recvAODVUUPacket(cMessage * msg)
         IPvXAddress srcAddr = ctrl->getSrcAddr();
         IPvXAddress destAddr = ctrl->getDestAddr();
 
-        src.s_addr = srcAddr.get4().getInt();
-        dst.s_addr =  destAddr.get4().getInt();
+        src.s_addr = ManetAddress(srcAddr);
+        dst.s_addr =  ManetAddress(destAddr);
         interfaceId = ctrl->getInterfaceId();
 
     }
     else
     {
         Ieee802Ctrl *ctrl = check_and_cast<Ieee802Ctrl *>(msg->getControlInfo());
-        src.s_addr = ctrl->getSrc().getInt();
-        dst.s_addr =  ctrl->getDest().getInt();
+        src.s_addr = ManetAddress(ctrl->getSrc());
+        dst.s_addr =  ManetAddress(ctrl->getDest());
     }
 
     InterfaceEntry *   ie;
-    for (int i = 0; i < getNumWlanInterfaces(); i++)
+    if (!isInMacLayer())
     {
-        ie = getWlanInterfaceEntry(i);
-        if (!isInMacLayer())
+        for (int i = 0; i < getNumWlanInterfaces(); i++)
         {
-            IPv4InterfaceData *ipv4data = ie->ipv4Data();
-            if (interfaceId ==ie->getInterfaceId())
-                ifIndex=getWlanInterfaceIndex(i);
+            ie = getWlanInterfaceEntry(i);
 
-            if (ipv4data->getIPAddress().getInt()== src.s_addr)
             {
-                delete   aodv_msg;
-                return;
-            }
-        }
-        else
-        {
-            Uint128 add = ie->getMacAddress().getInt();
-            if (add== src.s_addr)
-            {
-                delete   aodv_msg;
-                return;
+                // IPv4InterfaceData *ipv4data = ie->ipv4Data();
+                if (interfaceId == ie->getInterfaceId())
+                    ifIndex = getWlanInterfaceIndex(i);
             }
         }
     }
     aodv_socket_process_packet(aodv_msg, len, src, dst, ttl, ifIndex);
     delete   aodv_msg;
 }
+
+
+void NS_CLASS processMacPacket(cPacket * p, const ManetAddress &dest, const ManetAddress &src, int ifindex)
+{
+    struct in_addr dest_addr, src_addr;
+    bool isLocal = false;
+    struct ip_data *ipd = NULL;
+    u_int8_t rreq_flags = 0;
+
+    dest_addr.s_addr = dest;
+    src_addr.s_addr = src;
+    rt_table_t *fwd_rt, *rev_rt;
+
+    //InterfaceEntry *   ie = getInterfaceEntry(ifindex);
+    isLocal = isLocalAddress(src);
+
+    rev_rt = rt_table_find(src_addr);
+    fwd_rt = rt_table_find(dest_addr);
+
+
+    rt_table_update_route_timeouts(fwd_rt, rev_rt);
+
+    /* OK, the timeouts have been updated. Now see if either: 1. The
+       packet is for this node -> ACCEPT. 2. The packet is not for this
+       node -> Send RERR (someone want's this node to forward packets
+       although there is no route) or Send RREQ. */
+
+    if (!fwd_rt || fwd_rt->state == INVALID ||
+            (fwd_rt->hcnt == 1 && (fwd_rt->flags & RT_UNIDIR)))
+    {
+        // If I am the originating node, then a route discovery
+        // must be performed
+        if (isLocal || (fwd_rt && (fwd_rt->flags & RT_REPAIR)))
+        {
+            if (p->getControlInfo())
+                delete p->removeControlInfo();
+            packet_queue_add(p, dest_addr);
+            if (fwd_rt && (fwd_rt->flags & RT_REPAIR))
+                rreq_local_repair(fwd_rt, src_addr, ipd);
+            else
+            {
+                if (par("targetOnlyRreq").boolValue())
+                    rreq_flags |= RREQ_DEST_ONLY;
+                rreq_route_discovery(dest_addr, rreq_flags, ipd);
+            }
+        }
+        // Else we must send a RERR message to the source if
+        // the route has been previously used
+        else
+        {
+
+            RERR *rerr;
+            DEBUG(LOG_DEBUG, 0,
+                    "No route, src=%s dest=%s prev_hop=%s - DROPPING!",
+                    ip_to_str(src_addr), ip_to_str(dest_addr));
+            if (fwd_rt)
+            {
+                rerr = rerr_create(0, fwd_rt->dest_addr,fwd_rt->dest_seqno);
+                rt_table_update_timeout(fwd_rt, DELETE_PERIOD);
+            }
+            else
+                rerr = rerr_create(0, dest_addr, 0);
+            DEBUG(LOG_DEBUG, 0, "Sending RERR to prev hop %s for unknown dest %s",
+                    ip_to_str(src_addr), ip_to_str(dest_addr));
+
+                /* Unicast the RERR to the source of the data transmission
+                 * if possible, otherwise we broadcast it. */
+            struct in_addr rerr_dest;
+            if (rev_rt && rev_rt->state == VALID)
+                rerr_dest = rev_rt->next_hop;
+            else
+                rerr_dest.s_addr = ManetAddress(IPv4Address(AODV_BROADCAST));
+            aodv_socket_send((AODV_msg *) rerr, rerr_dest,RERR_CALC_SIZE(rerr),
+                    1, &DEV_IFINDEX(ifindex));
+            if (wait_on_reboot)
+            {
+                DEBUG(LOG_DEBUG, 0, "Wait on reboot timer reset.");
+                timer_set_timeout(&worb_timer, DELETE_PERIOD);
+            }
+            //drop (p);
+            sendICMP(p);
+            /* DEBUG(LOG_DEBUG, 0, "Dropping pkt uid=%d", ch->uid()); */
+            //  icmpAccess.get()->sendErrorMessage(p, ICMP_DESTINATION_UNREACHABLE, 0);
+            return;
+        }
+        scheduleNextEvent();
+        return;
+    }
+    else
+    {
+        /* DEBUG(LOG_DEBUG, 0, "Sending pkt uid=%d", ch->uid()); */
+        if (p->getControlInfo())
+            delete p->removeControlInfo();
+        if (isInMacLayer())
+        {
+            Ieee802Ctrl *ctrl = new Ieee802Ctrl();
+            ctrl->setDest(fwd_rt->next_hop.s_addr.getMAC());
+            //TODO ctrl->setEtherType(...);
+            p->setControlInfo(ctrl);
+        }
+
+        send(p, "to_ip");
+        /* When forwarding data, make sure we are sending HELLO messages */
+        //gettimeofday(&this_host.fwd_time, NULL);
+        if (!llfeedback && optimized_hellos)
+            hello_start();
+    }
+}
+
 
 
 void NS_CLASS processPacket(IPv4Datagram * p,unsigned int ifindex)
@@ -870,14 +1106,14 @@ void NS_CLASS processPacket(IPv4Datagram * p,unsigned int ifindex)
 
     bool isLocal=true;
 
-    src_addr.s_addr = p->getSrcAddress().getInt();
-    dest_addr.s_addr = p->getDestAddress().getInt();
+    src_addr.s_addr = ManetAddress(p->getSrcAddress());
+    dest_addr.s_addr = ManetAddress(p->getDestAddress());
 
     InterfaceEntry *   ie;
 
     if (!p->getSrcAddress().isUnspecified())
     {
-        isLocal = isLocalAddress(p->getSrcAddress().getInt());
+        isLocal = isLocalAddress(ManetAddress(p->getSrcAddress()));
     }
 
     ie = getInterfaceEntry (ifindex);
@@ -886,10 +1122,10 @@ void NS_CLASS processPacket(IPv4Datagram * p,unsigned int ifindex)
 
     /* If this is a TCP packet and we don't have a route, we should
        set the gratuituos flag in the RREQ. */
-    bool isMcast = ie->ipv4Data()->isMemberOfMulticastGroup(IPv4Address(dest_addr.s_addr));
+    bool isMcast = ie->ipv4Data()->isMemberOfMulticastGroup(dest_addr.s_addr.getIPv4());
 
     /* If the packet is not interesting we just let it go through... */
-    if (dest_addr.s_addr == AODV_BROADCAST ||isMcast)
+    if (isMcast || dest_addr.s_addr == ManetAddress(IPv4Address(AODV_BROADCAST)))
     {
         send(p,"to_ip");
         return;
@@ -965,7 +1201,7 @@ void NS_CLASS processPacket(IPv4Datagram * p,unsigned int ifindex)
         if (rev_rt && rev_rt->state == VALID)
             rerr_dest = rev_rt->next_hop;
         else
-            rerr_dest.s_addr = AODV_BROADCAST;
+            rerr_dest.s_addr = ManetAddress(IPv4Address(AODV_BROADCAST));
 
         aodv_socket_send((AODV_msg *) rerr, rerr_dest,RERR_CALC_SIZE(rerr),
                          1, &DEV_IFINDEX(ifindex));
@@ -1041,7 +1277,7 @@ void NS_CLASS processLinkBreak(const cPolymorphic *details)
     {
         if (dynamic_cast<IPv4Datagram *>(const_cast<cPolymorphic*> (details)))
         {
-            dgram = check_and_cast<IPv4Datagram *>(details);
+            dgram = const_cast<IPv4Datagram *>(check_and_cast<const IPv4Datagram *>(details));
             packetFailed(dgram);
             return;
         }
@@ -1053,6 +1289,78 @@ void NS_CLASS processLinkBreak(const cPolymorphic *details)
     }
 }
 
+void NS_CLASS processPromiscuous(const cObject *details)
+{
+
+    if (dynamic_cast<Ieee80211DataFrame *>(const_cast<cPolymorphic*> (details)))
+    {
+        Ieee80211DataFrame *frame = dynamic_cast<Ieee80211DataFrame *>(const_cast<cObject*>(details));
+        cPacket * pktAux = frame->getEncapsulatedPacket();
+        if (!isInMacLayer() && pktAux != NULL)
+        {
+            /*
+            if (dynamic_cast<IPv4Datagram *>(pktAux))
+            {
+                cPacket * pktAux1 = pktAux->getEncapsulatedPacket(); // Transport
+                if (pktAux1)
+                {
+                    cPacket * pktAux2 = pktAux->getEncapsulatedPacket(); // protocol
+                    if (pktAux2 && dynamic_cast<RREP *> (pktAux2))
+                    {
+
+                    }
+                }
+            }
+            */
+        }
+        else if (isInMacLayer() && dynamic_cast<Ieee80211MeshFrame *>(frame))
+        {
+            Ieee80211MeshFrame *meshFrame = dynamic_cast<Ieee80211MeshFrame *>(frame);
+            if (meshFrame->getSubType() == ROUTING)
+            {
+                cPacket * pktAux2 = meshFrame->getEncapsulatedPacket(); // protocol
+                if (pktAux2 && dynamic_cast<RREP *> (pktAux2) && checkRrep)
+                {
+                    RREP* rrep = dynamic_cast<RREP *> (pktAux2);
+                    PacketDestOrigin destOrigin(rrep->dest_addr,rrep->orig_addr);
+                    std::map<PacketDestOrigin,RREPProcessed>::iterator it = rrepProc.find(destOrigin);
+                    if (it == rrepProc.end())
+                    {
+                        // new
+                        RREPProcessed rproc;
+                        rproc.cost = rrep->cost;
+                        rproc.dest_seqno = rrep->dest_seqno;
+                        rproc.hcnt = rrep->hcnt;
+                        rproc.hopfix = rrep->hopfix;
+                        rproc.totalHops = rrep->totalHops;
+                        rproc.next = ManetAddress(meshFrame->getReceiverAddress());
+                    }
+                    else if (it->second.dest_seqno < rrep->dest_seqno)
+                    {
+                        // actualize
+                        it->second.cost = rrep->cost;
+                        it->second.dest_seqno = rrep->dest_seqno;
+                        it->second.hcnt = rrep->hcnt;
+                        it->second.hopfix = rrep->hopfix;
+                        it->second.next = ManetAddress(meshFrame->getReceiverAddress());
+                    }
+                    else if (it->second.dest_seqno == rrep->dest_seqno)
+                    {
+                        // equal seq num check
+                        if (it->second.hcnt > rrep->hcnt)
+                        {
+                            it->second.cost = rrep->cost;
+                            it->second.dest_seqno = rrep->dest_seqno;
+                            it->second.hcnt = rrep->hcnt;
+                            it->second.hopfix = rrep->hopfix;
+                            it->second.next = ManetAddress(meshFrame->getReceiverAddress());
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 
 void NS_CLASS finish()
 {
@@ -1076,17 +1384,17 @@ void NS_CLASS finish()
 }
 
 
-uint32_t NS_CLASS getRoute(const Uint128 &dest,std::vector<Uint128> &add)
+uint32_t NS_CLASS getRoute(const ManetAddress &dest,std::vector<ManetAddress> &add)
 {
     return 0;
 }
 
 
-bool  NS_CLASS getNextHop(const Uint128 &dest,Uint128 &add, int &iface,double &cost)
+bool  NS_CLASS getNextHop(const ManetAddress &dest,ManetAddress &add, int &iface,double &cost)
 {
     struct in_addr destAddr;
     destAddr.s_addr = dest;
-    Uint128 apAddr;
+    ManetAddress apAddr;
     rt_table_t * fwd_rt = this->rt_table_find(destAddr);
     if (fwd_rt)
     {
@@ -1120,16 +1428,29 @@ bool NS_CLASS isProactive()
     return false;
 }
 
-void NS_CLASS setRefreshRoute(const Uint128 &destination, const Uint128 & nextHop,bool isReverse)
+void NS_CLASS setRefreshRoute(const ManetAddress &destination, const ManetAddress & nextHop,bool isReverse)
 {
     struct in_addr dest_addr, next_hop;
     dest_addr.s_addr = destination;
     next_hop.s_addr = nextHop;
     rt_table_t * route  = rt_table_find(dest_addr);
 
+    ManetAddress apAddr;
+    bool gratuitus = false;
+
+
+    if (getAp(destination,apAddr))
+    {
+        dest_addr.s_addr = apAddr;
+    }
+    if (getAp(nextHop,apAddr))
+    {
+        next_hop.s_addr = apAddr;
+    }
+
     if(par ("checkNextHop").boolValue())
     {
-        if (nextHop == (Uint128)0)
+        if (nextHop.isUnspecified())
            return;
         if (!isReverse)
         {
@@ -1138,7 +1459,7 @@ void NS_CLASS setRefreshRoute(const Uint128 &destination, const Uint128 & nextHo
         }
 
 
-        if (isReverse && !route)
+        if (isReverse && !route && gratuitus)
         {
             // Gratuitous Return Path
             struct in_addr node_addr;
@@ -1147,7 +1468,7 @@ void NS_CLASS setRefreshRoute(const Uint128 &destination, const Uint128 & nextHo
             ip_src.s_addr = nextHop;
             rt_table_insert(node_addr, ip_src,0,0, ACTIVE_ROUTE_TIMEOUT, VALID, 0,NS_DEV_NR,0xFFFFFFF,100);
         }
-        else if (route && (route->next_hop.s_addr==nextHop))
+        else if (route && (route->next_hop.s_addr == nextHop))
             rt_table_update_route_timeouts(NULL, route);
 
     }
@@ -1160,7 +1481,7 @@ void NS_CLASS setRefreshRoute(const Uint128 &destination, const Uint128 & nextHo
         }
 
 
-        if (isReverse && !route && nextHop != (Uint128)0)
+        if (isReverse && !route && !nextHop.isUnspecified())
         {
             // Gratuitous Return Path
             struct in_addr node_addr;
@@ -1187,7 +1508,7 @@ bool NS_CLASS isOurType(cPacket * msg)
     return false;
 }
 
-bool NS_CLASS getDestAddress(cPacket *msg,Uint128 &dest)
+bool NS_CLASS getDestAddress(cPacket *msg,ManetAddress &dest)
 {
     RREQ *rreq = dynamic_cast <RREQ *>(msg);
     if (!rreq)
@@ -1196,8 +1517,26 @@ bool NS_CLASS getDestAddress(cPacket *msg,Uint128 &dest)
     return true;
 
 }
+
+bool AODVUU::getDestAddressRreq(cPacket *msg,PacketDestOrigin &orgDest,RREQInfo &rreqInfo)
+{
+    RREQ *rreq = dynamic_cast <RREQ *>(msg);
+    if (!rreq)
+        return false;
+    orgDest.setDests(rreq->dest_addr);
+    orgDest.setOrigin(rreq->orig_addr);
+    rreqInfo.origin_seqno = rreq->orig_seqno;
+    rreqInfo.dest_seqno = rreq->dest_seqno;
+    rreqInfo.hcnt = rreq->hcnt;
+    rreqInfo.cost = rreq->cost;
+    rreqInfo.hopfix = rreq->hopfix;
+    return true;
+}
+
+
+
 #ifdef AODV_USE_STL_RT
-bool  NS_CLASS setRoute(const Uint128 &dest,const Uint128 &add, const int &ifaceIndex,const int &hops,const Uint128 &mask)
+bool  NS_CLASS setRoute(const ManetAddress &dest,const ManetAddress &add, const int &ifaceIndex,const int &hops,const ManetAddress &mask)
 {
     Enter_Method_Silent();
     struct in_addr destAddr;
@@ -1206,7 +1545,7 @@ bool  NS_CLASS setRoute(const Uint128 &dest,const Uint128 &add, const int &iface
     destAddr.s_addr = dest;
     nextAddr.s_addr = add;
     bool status=true;
-    bool delEntry = (add == (Uint128)0);
+    bool delEntry = add.isUnspecified();
 
     DEBUG(LOG_DEBUG, 0, "setRoute %s next hop %s",ip_to_str(destAddr),ip_to_str(nextAddr));
 
@@ -1221,12 +1560,12 @@ bool  NS_CLASS setRoute(const Uint128 &dest,const Uint128 &add, const int &iface
 
             /* Unicast the RERR to the source of the data transmission
              * if possible, otherwise we broadcast it. */
-            rerr_dest.s_addr = AODV_BROADCAST;
+            rerr_dest.s_addr = ManetAddress(IPv4Address(AODV_BROADCAST));
 
             aodv_socket_send((AODV_msg *) rerr, rerr_dest,RERR_CALC_SIZE(rerr),
                              1, &DEV_IFINDEX(NS_IFINDEX));
         }
-        Uint128 dest = fwd_rt->dest_addr.s_addr;
+        ManetAddress dest = fwd_rt->dest_addr.s_addr;
         AodvRtTableMap::iterator it = aodvRtTableMap.find(dest);
         if (it != aodvRtTableMap.end())
         {
@@ -1260,7 +1599,7 @@ bool  NS_CLASS setRoute(const Uint128 &dest,const Uint128 &add, const int &iface
 }
 
 
-bool  NS_CLASS setRoute(const Uint128 &dest,const Uint128 &add, const char  *ifaceName,const int &hops,const Uint128 &mask)
+bool  NS_CLASS setRoute(const ManetAddress &dest,const ManetAddress &add, const char  *ifaceName,const int &hops,const ManetAddress &mask)
 {
     Enter_Method_Silent();
     struct in_addr destAddr;
@@ -1270,7 +1609,7 @@ bool  NS_CLASS setRoute(const Uint128 &dest,const Uint128 &add, const char  *ifa
     nextAddr.s_addr = add;
     bool status=true;
     int index;
-    bool delEntry = (add == (Uint128)0);
+    bool delEntry = add.isUnspecified();
 
     DEBUG(LOG_DEBUG, 0, "setRoute %s next hop %s",ip_to_str(destAddr),ip_to_str(nextAddr));
     rt_table_t * fwd_rt = rt_table_find(destAddr);
@@ -1284,12 +1623,12 @@ bool  NS_CLASS setRoute(const Uint128 &dest,const Uint128 &add, const char  *ifa
 
             /* Unicast the RERR to the source of the data transmission
              * if possible, otherwise we broadcast it. */
-            rerr_dest.s_addr = AODV_BROADCAST;
+            rerr_dest.s_addr = ManetAddress(IPv4Address(AODV_BROADCAST));
 
             aodv_socket_send((AODV_msg *) rerr, rerr_dest,RERR_CALC_SIZE(rerr),
                              1, &DEV_IFINDEX(NS_IFINDEX));
         }
-        Uint128 dest = fwd_rt->dest_addr.s_addr;
+        ManetAddress dest = fwd_rt->dest_addr.s_addr;
         AodvRtTableMap::iterator it = aodvRtTableMap.find(dest);
         if (it != aodvRtTableMap.end())
         {
@@ -1328,7 +1667,7 @@ bool  NS_CLASS setRoute(const Uint128 &dest,const Uint128 &add, const char  *ifa
 }
 #else
 
-bool  NS_CLASS setRoute(const Uint128 &dest,const Uint128 &add, const int &ifaceIndex,const int &hops,const Uint128 &mask)
+bool  NS_CLASS setRoute(const ManetAddress &dest,const ManetAddress &add, const int &ifaceIndex,const int &hops,const ManetAddress &mask)
 {
     Enter_Method_Silent();
     struct in_addr destAddr;
@@ -1337,7 +1676,7 @@ bool  NS_CLASS setRoute(const Uint128 &dest,const Uint128 &add, const int &iface
     destAddr.s_addr = dest;
     nextAddr.s_addr = add;
     bool status=true;
-    bool delEntry = (add == (Uint128)0);
+    bool delEntry = (add == (ManetAddress)0);
 
     DEBUG(LOG_DEBUG, 0, "setRoute %s next hop %s",ip_to_str(destAddr),ip_to_str(nextAddr));
 
@@ -1384,7 +1723,7 @@ bool  NS_CLASS setRoute(const Uint128 &dest,const Uint128 &add, const int &iface
     return status;
 }
 
-bool  NS_CLASS setRoute(const Uint128 &dest,const Uint128 &add, const char  *ifaceName,const int &hops,const Uint128 &mask)
+bool  NS_CLASS setRoute(const ManetAddress &dest,const ManetAddress &add, const char  *ifaceName,const int &hops,const ManetAddress &mask)
 {
     Enter_Method_Silent();
     struct in_addr destAddr;
@@ -1394,7 +1733,7 @@ bool  NS_CLASS setRoute(const Uint128 &dest,const Uint128 &add, const char  *ifa
     nextAddr.s_addr = add;
     bool status=true;
     int index;
-    bool delEntry = (add == (Uint128)0);
+    bool delEntry = (add == (ManetAddress)0);
 
     DEBUG(LOG_DEBUG, 0, "setRoute %s next hop %s",ip_to_str(destAddr),ip_to_str(nextAddr));
     rt_table_t * fwd_rt = rt_table_find(destAddr);
@@ -1446,4 +1785,82 @@ bool  NS_CLASS setRoute(const Uint128 &dest,const Uint128 &add, const char  *ifa
 }
 #endif
 
+bool NS_CLASS isThisRrepPrevSent(cMessage *msg)
+{
+    if (!checkRrep)
+        return false;
+    RREP *rrep = dynamic_cast<RREP *>(msg);
+    if (rrep->hcnt == 0)
+            return false; // this packet had this node like destination, in this case the node must send the packet
 
+    if (rrep == NULL)
+         return false; // no information, send
+
+    PacketDestOrigin destOrigin(rrep->dest_addr,rrep->orig_addr);
+    std::map<PacketDestOrigin,RREPProcessed>::iterator it = rrepProc.find(destOrigin);
+    if (it != rrepProc.end()) // only send if the seq num is bigger
+    {
+        if (it->second.dest_seqno > rrep->dest_seqno)
+        {
+            return true;
+        }
+        else if (it->second.dest_seqno == rrep->dest_seqno && it->second.totalHops < rrep->totalHops)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+void NS_CLASS actualizeTablesWithCollaborative(const ManetAddress &dest)
+{
+    if (!getCollaborativeProtocol())
+        return;
+
+    struct in_addr next_hop,destination;
+    int iface;
+    double cost;
+
+    if (getCollaborativeProtocol()->getNextHop(dest,next_hop.s_addr,iface,cost))
+    {
+        u_int8_t hops = cost;
+        destination.s_addr = dest;
+        std::map<ManetAddress,u_int32_t *>::iterator it =  mapSeqNum.find(dest);
+        if (it == mapSeqNum.end())
+            opp_error("node not found in mapSeqNum");
+        uint32_t sqnum = *(it->second);
+        uint32_t life = PATH_DISCOVERY_TIME - 2 * hops * NODE_TRAVERSAL_TIME;
+        int ifindex = -1;
+
+        rt_table_t * fwd_rt = rt_table_find(destination);
+
+        for (int i = 0; i < getNumInterfaces(); i++)
+        {
+            if (getInterfaceEntry(i)->getInterfaceId() == iface)
+            {
+                ifindex = i;
+                break;
+            }
+        }
+
+        if (ifindex == -1)
+            opp_error("interface not found");
+
+        if (fwd_rt)
+            fwd_rt = rt_table_update(fwd_rt, next_hop, hops, sqnum, life, VALID, fwd_rt->flags,ifindex, cost, cost+1);
+        else
+            fwd_rt = rt_table_insert(destination, next_hop, hops, sqnum, life, VALID, 0, ifindex, cost, cost+1);
+
+        hops = 1;
+        rt_table_t * fwd_rtAux = rt_table_find(next_hop);
+        it =  mapSeqNum.find(next_hop.s_addr);
+        if (it == mapSeqNum.end())
+            opp_error("node not found in mapSeqNum");
+        sqnum = *(it->second);
+        life = PATH_DISCOVERY_TIME - 2 * (int)hops * NODE_TRAVERSAL_TIME;
+        if (fwd_rtAux)
+            fwd_rtAux = rt_table_update(fwd_rtAux, next_hop, hops, sqnum, life, VALID, fwd_rtAux->flags,ifindex, hops, hops+1);
+        else
+            fwd_rtAux = rt_table_insert(next_hop, next_hop, hops, sqnum, life, VALID, 0, ifindex, hops, hops+1);
+    }
+}

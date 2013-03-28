@@ -66,8 +66,10 @@ void ChannelControl::initialize()
     transmissions.resize(numChannels);
 
     lastOngoingTransmissionsUpdate = 0;
-
-    maxInterferenceDistance = calcInterfDist();
+    if (par("maxInterferenceDistance").doubleValue() > 0)
+        maxInterferenceDistance = par("maxInterferenceDistance").doubleValue();
+    else
+        maxInterferenceDistance = calcInterfDist();
 
     WATCH(maxInterferenceDistance);
     WATCH_LIST(radios);
@@ -308,7 +310,7 @@ void ChannelControl::sendToChannel(RadioRef srcRadio, AirFrame *airFrame)
             coreEV << "sending message to radio listening on the same channel\n";
             // account for propagation delay, based on distance in meters
             // Over 300m, dt=1us=10 bit times @ 10Mbps
-            simtime_t delay = srcRadio->pos.distance(r->pos) / LIGHT_SPEED;
+            simtime_t delay = srcRadio->pos.distance(r->pos) / SPEED_OF_LIGHT;
             check_and_cast<cSimpleModule*>(srcRadio->radioModule)->sendDirect(airFrame->dup(), delay, airFrame->getDuration(), r->radioInGate);
         }
         else

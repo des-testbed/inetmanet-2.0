@@ -249,8 +249,9 @@ void IPv4::handlePacketFromNetwork(IPv4Datagram *datagram, InterfaceEntry *fromI
 #endif
         InterfaceEntry *broadcastIE = NULL;
 
-        // check for local delivery
-        if (rt->isLocalAddress(destAddr))
+        // check for local delivery; we must accept also packets coming from the interfaces that
+        // do not yet have an IP address assigned. This happens during DHCP requests.
+        if (rt->isLocalAddress(destAddr) || fromIE->ipv4Data()->getIPAddress().isUnspecified())
         {
             reassembleAndDeliver(datagram);
         }
@@ -487,10 +488,8 @@ void IPv4::routeUnicastPacket(IPv4Datagram *datagram, InterfaceEntry *destIE, IP
     else
     {
         // use IPv4 routing (lookup in routing table)
-        //    FIXME MANET routes should use 255.255.255.255 netmask,
-        //          to eliminate the equality check below.
         const IPv4Route *re = rt->findBestMatchingRoute(destAddr);
-        if (re && (re->getSource() != IPv4Route::MANET || re->getDestination() == destAddr))
+        if (re)
         {
             destIE = re->getInterface();
             nextHopAddr = re->getGateway();
@@ -873,8 +872,8 @@ void IPv4::sendRouteUpdateMessageToManet(IPv4Datagram *datagram)
     {
         ControlManetRouting *control = new ControlManetRouting();
         control->setOptionCode(MANET_ROUTE_UPDATE);
-        control->setSrcAddress(datagram->getSrcAddress().getInt());
-        control->setDestAddress(datagram->getDestAddress().getInt());
+        control->setSrcAddress(ManetAddress(datagram->getSrcAddress()));
+        control->setDestAddress(ManetAddress(datagram->getDestAddress()));
         sendToManet(control);
     }
 }
@@ -889,8 +888,8 @@ void IPv4::sendNoRouteMessageToManet(IPv4Datagram *datagram)
     {
         ControlManetRouting *control = new ControlManetRouting();
         control->setOptionCode(MANET_ROUTE_NOROUTE);
-        control->setSrcAddress(datagram->getSrcAddress().getInt());
-        control->setDestAddress(datagram->getDestAddress().getInt());
+        control->setSrcAddress(ManetAddress(datagram->getSrcAddress()));
+        control->setDestAddress(ManetAddress(datagram->getDestAddress()));
         control->encapsulate(datagram);
         sendToManet(control);
     }

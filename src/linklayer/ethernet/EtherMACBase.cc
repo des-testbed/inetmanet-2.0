@@ -355,7 +355,7 @@ void EtherMACBase::receiveSignal(cComponent *src, simsignal_t signalId, cObject 
     else if (transmissionChannel && dynamic_cast<cPostParameterChangeNotification *>(obj)) // note: we are subscribed to the channel object too
     {
         cPostParameterChangeNotification *gcobj = (cPostParameterChangeNotification *)obj;
-        if (transmissionChannel == gcobj->par->getOwner() && !strcmp("datarate", gcobj->par->getName()))
+        if (transmissionChannel == gcobj->par->getOwner())
             refreshConnection();
     }
 }
@@ -413,17 +413,17 @@ void EtherMACBase::refreshConnection()
 bool EtherMACBase::dropFrameNotForUs(EtherFrame *frame)
 {
     // Current ethernet mac implementation does not support the configuration of multicast
-    // ethernet address groups. We rather accept all multicast frames (just like they were 
+    // ethernet address groups. We rather accept all multicast frames (just like they were
     // broadcasts) and pass it up to the higher layer where they will be dropped
     // if not needed.
     //
     // PAUSE frames must be handled a bit differently because they are processed at
-    // this level. Multicast PAUSE frames should not be processed unless they have a 
+    // this level. Multicast PAUSE frames should not be processed unless they have a
     // destination of MULTICAST_PAUSE_ADDRESS. We drop all PAUSE frames that have a
     // different muticast destination. (Note: Would the multicast ethernet addressing
     // implemented, we could also process the PAUSE frames destined to any of our
     // multicast adresses)
-    // All NON-PAUSE frames must be passed to the upper layer if the interface is 
+    // All NON-PAUSE frames must be passed to the upper layer if the interface is
     // in promiscuous mode.
 
     if (frame->getDest().equals(address))
@@ -447,10 +447,22 @@ bool EtherMACBase::dropFrameNotForUs(EtherFrame *frame)
     return true;
 }
 
+template<class T>
+T check_and_cast_nullable(cObject *p)
+{
+    return p ? check_and_cast<T>(p) : NULL;
+}
+
 void EtherMACBase::readChannelParameters(bool errorWhenAsymmetric)
 {
-    cChannel *outTrChannel = physOutGate->findTransmissionChannel();
-    cChannel *inTrChannel = physInGate->findIncomingTransmissionChannel();
+    // When the connected channels change at runtime, we'll receive
+    // two separate notifications (one for the rx channel and one for the tx one),
+    // so we cannot immediately raise an error when they differ. Rather, we'll need
+    // to verify at the next opportunity (event) that the two channels have eventually
+    // been set to the same value.
+
+    cDatarateChannel *outTrChannel = check_and_cast_nullable<cDatarateChannel *>(physOutGate->findTransmissionChannel());
+    cDatarateChannel *inTrChannel = check_and_cast_nullable<cDatarateChannel *>(physInGate->findIncomingTransmissionChannel());
 
     connected = physOutGate->getPathEndGate()->isConnected() && physInGate->getPathStartGate()->isConnected();
 
@@ -460,11 +472,22 @@ void EtherMACBase::readChannelParameters(bool errorWhenAsymmetric)
     double txRate = outTrChannel ? outTrChannel->getNominalDatarate() : 0.0;
     double rxRate = inTrChannel ? inTrChannel->getNominalDatarate() : 0.0;
 
+    bool rxDisabled = !inTrChannel || inTrChannel->isDisabled();
+    bool txDisabled = !outTrChannel || outTrChannel->isDisabled();
+
+    if (errorWhenAsymmetric && (rxDisabled != txDisabled))
+        throw cRuntimeError("The input/output channels states differ (%s / %)", rxDisabled?"off":"on", txDisabled?"off":"on");
+
+    if (txDisabled)
+        connected = false;
+
+    bool dataratesDiffer;
     if (!connected)
     {
         curEtherDescr = &nullEtherDescr;
-        dataratesDiffer = (outTrChannel != NULL) || (inTrChannel != NULL);
-        transmissionChannel = NULL;
+        dataratesDiffer = false;
+        if (!outTrChannel)
+            transmissionChannel = NULL;
         interfaceEntry->setDown(true);
         interfaceEntry->setDatarate(0);
     }
@@ -476,19 +499,10 @@ void EtherMACBase::readChannelParameters(bool errorWhenAsymmetric)
         dataratesDiffer = (txRate != rxRate);
     }
 
-    if (dataratesDiffer)
-    {
-        if (errorWhenAsymmetric)
-            throw cRuntimeError("The input/output datarates differ (%g / %g bps)", rxRate, txRate);
+    channelsDiffer = dataratesDiffer || (rxDisabled != txDisabled);
 
-        // When the datarate of the connected channels change at runtime, we'll receive
-        // two separate notifications (one for the rx channel and one for the tx one),
-        // so we cannot immediately raise an error when they differ. Rather, we'll need
-        // to verify at the next opportunity (event) that the two datarates have eventually
-        // been set to the same value.
-        //
-        EV << "The input/output datarates differ (" << rxRate << " / " << txRate << "bps).\n";
-    }
+    if (errorWhenAsymmetric && dataratesDiffer)
+        throw cRuntimeError("The input/output datarates differ (%g / %g bps)", rxRate, txRate);
 
     if (connected)
     {

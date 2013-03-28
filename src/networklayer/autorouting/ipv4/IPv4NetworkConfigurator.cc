@@ -551,7 +551,9 @@ void IPv4NetworkConfigurator::collectCompatibleInterfaces(const std::vector<Inte
         compatibleInterfaces.push_back(candidateInterface);
         EV_DEBUG << "Merged address specification: " << IPv4Address(mergedAddress) << " / " << IPv4Address(mergedAddressSpecifiedBits) << " / " << IPv4Address(mergedAddressIncompatibleBits) << endl;
         EV_DEBUG << "Merged netmask specification: " << IPv4Address(mergedNetmask) << " / " << IPv4Address(mergedNetmaskSpecifiedBits) << " / " << IPv4Address(mergedNetmaskIncompatibleBits) << endl;
+
     }
+    // TODO: sort compatibleInterfaces putting the most limited interfaces first
     EV_DEBUG << "Found " << compatibleInterfaces.size() << " compatible interfaces" << endl;
 }
 
@@ -690,6 +692,7 @@ void IPv4NetworkConfigurator::assignAddresses(IPv4Topology& topology)
                 assignedInterfaceAddresses.push_back(completeAddress);
 
                 // configure interface with the selected address and netmask
+                // TODO: make it possible that unconfigured interfaces don't get allocated IP addresses
                 if (compatibleInterface->configure)
                 {
                     IPv4InterfaceData *interfaceData = compatibleInterface->interfaceEntry->ipv4Data();
@@ -837,6 +840,7 @@ void IPv4NetworkConfigurator::readAddressConfiguration(cXMLElement *root, IPv4To
         const char *netmaskAttr = interfaceElement->getAttribute("netmask"); // "255.255.x.x"
         const char *mtuAttr = interfaceElement->getAttribute("mtu"); // integer
         const char *metricAttr = interfaceElement->getAttribute("metric"); // integer
+        const char *groupsAttr = interfaceElement->getAttribute("groups"); // list of multicast addresses
 
         if (amongAttr && *amongAttr)       // among="X Y Z" means hosts = "X Y Z" towards = "X Y Z"
         {
@@ -902,6 +906,17 @@ void IPv4NetworkConfigurator::readAddressConfiguration(cXMLElement *root, IPv4To
                             {
                                 ASSERT(interfaceInfo->interfaceEntry->ipv4Data());
                                 interfaceInfo->interfaceEntry->ipv4Data()->setMetric(atoi(metricAttr));
+                            }
+
+                            // groups
+                            if (isNotEmpty(groupsAttr))
+                            {
+                                ASSERT(interfaceInfo->interfaceEntry->ipv4Data());
+                                cStringTokenizer tokenizer(groupsAttr);
+                                while (tokenizer.hasMoreTokens()) {
+                                    IPv4Address address(tokenizer.nextToken());
+                                    interfaceInfo->interfaceEntry->ipv4Data()->joinMulticastGroup(address);
+                                }
                             }
 
                             interfacesSeen.insert(interfaceInfo);

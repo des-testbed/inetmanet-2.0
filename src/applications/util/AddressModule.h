@@ -31,8 +31,12 @@ class AddressModule : public cNoncopyableOwnedObject,cListener
         bool isInitialized;
         bool emitSignal;
         std::vector<IPvXAddress> destAddresses;
+        std::vector<int> destModuleId;
+
         IPvXAddress chosedAddresses;
-        static simsignal_t changeAddressSignal;
+        int index;
+        static simsignal_t changeAddressSignalInit;
+        static simsignal_t changeAddressSignalDelete;
         IPvXAddress myAddress;
         virtual void receiveSignal(cComponent *src, simsignal_t id, cObject *obj);
     public:
@@ -40,10 +44,12 @@ class AddressModule : public cNoncopyableOwnedObject,cListener
         virtual IPvXAddress getAddress(int val = -1);
         unsigned int getNumAddress() const {return destAddresses.size();}
         virtual IPvXAddress choseNewAddress();
+        virtual int choseNewModule();
         AddressModule();
         virtual ~AddressModule();
         virtual bool isInit() const {return isInitialized;}
         virtual void rebuildAddressList();
+        virtual int getModule(int val = -1);
 };
 
 #endif /* AddressModule_H_ */

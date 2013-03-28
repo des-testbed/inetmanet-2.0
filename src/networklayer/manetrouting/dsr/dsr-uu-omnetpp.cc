@@ -659,7 +659,7 @@ void DSRUU::receiveChangeNotification(int category, const cObject *details)
 
             if (dynamic_cast<Ieee80211DataFrame *>(const_cast<cObject*>(details)))
             {
-                Ieee80211DataFrame *frame = check_and_cast<Ieee80211DataFrame *>(details);
+                const Ieee80211DataFrame *frame = check_and_cast<const Ieee80211DataFrame *>(details);
                 if (dynamic_cast<DSRPkt *>(frame->getEncapsulatedPacket()))
                 {
 
@@ -720,7 +720,13 @@ void DSRUU::packetFailed(IPv4Datagram *ipDgram)
         {
             dsr_rerr_send(dp, nxt_hop);
             dp->nxt_hop = nxt_hop;
-            maint_buf_salvage(dp);
+            if (maint_buf_salvage(dp) < 0)
+            {
+                if (dp->payload)
+                    drop(dp->payload, -1);
+                dp->payload = NULL;
+                dsr_pkt_free(dp);
+            }
         }
         /* Salvage the other packets still in the interface queue with the same
          * next hop */

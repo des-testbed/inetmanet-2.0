@@ -64,6 +64,16 @@
 Define_Module(OLSR);
 
 
+std::ostream& operator<<(std::ostream& os, const OLSR_rt_entry& e)
+{
+    os << "dest:"<< e.dest_addr_.str() << " ";
+    os << "gw:" << e.next_addr_.str() << " ";
+    os << "iface:" << e.iface_addr_.str() << " ";
+    os << "dist:" << e.dist_ << " ";
+    return os;
+};
+
+
 uint32 OlsrAddressSize::ADDR_SIZE = ADDR_SIZE_DEFAULT;
 OLSR::GlobalRtable OLSR::globalRtable;
 OLSR::DistributionPath OLSR::distributionPath;
@@ -527,6 +537,9 @@ OLSR::initialize(int stage)
 
         globalRtable[ra_addr()] = &rtable_;
         computed = false;
+
+        WATCH_PTRMAP(rtable_.rt_);
+
     }
 }
 
@@ -592,7 +605,7 @@ OLSR::check_packet(cPacket* msg, nsaddr_t &src_addr, int &index)
                 return NULL;
             }
             Ieee802Ctrl* ctrl = check_and_cast<Ieee802Ctrl*>(msg->removeControlInfo());
-            src_addr = ctrl->getSrc().getInt();
+            src_addr = ManetAddress(ctrl->getSrc());
             delete ctrl;
             return dynamic_cast<OLSR_pkt  *>(msg);
         }
@@ -630,7 +643,7 @@ OLSR::check_packet(cPacket* msg, nsaddr_t &src_addr, int &index)
         return NULL;
     }
     IPv4ControlInfo* controlInfo = check_and_cast<IPv4ControlInfo*>(msg->removeControlInfo());
-    src_addr = controlInfo->getSrcAddr().getInt();
+    src_addr = ManetAddress(controlInfo->getSrcAddr());
     index = -1;
     InterfaceEntry * ie;
 
@@ -1266,7 +1279,7 @@ OLSR::mpr_computation()
 void
 OLSR::rtable_computation()
 {
-    nsaddr_t netmask(IPv4Address::ALLONES_ADDRESS.getInt());
+    nsaddr_t netmask(IPv4Address::ALLONES_ADDRESS);
     // 1. All the entries from the routing table are removed.
     //
 
@@ -1788,7 +1801,11 @@ OLSR::send_pkt()
     int num_pkts = (num_msgs%OLSR_MAX_MSGS == 0) ? num_msgs/OLSR_MAX_MSGS :
                    (num_msgs/OLSR_MAX_MSGS + 1);
 
-    Uint128 destAdd = IPv4Address::ALLONES_ADDRESS.getInt();
+    ManetAddress destAdd;
+    if (!this->isInMacLayer())
+        destAdd.set(IPv4Address::ALLONES_ADDRESS);
+    else
+        destAdd.set(MACAddress::BROADCAST_ADDRESS);
 
     for (int i = 0; i < num_pkts; i++)
     {
@@ -1812,7 +1829,7 @@ OLSR::send_pkt()
             it = msgs_.erase(it);
         }
 
-        sendToIp(op, RT_PORT, destAdd, RT_PORT, IP_DEF_TTL, (nsaddr_t)0);
+        sendToIp(op, RT_PORT, destAdd, RT_PORT, IP_DEF_TTL, 0.0, ManetAddress::ZERO);
     }
 }
 
@@ -2234,12 +2251,12 @@ OLSR::mac_failed(IPv4Datagram* p)
     double now = CURRENT_TIME;
 
 
-    nsaddr_t dest_addr = p->getDestAddress().getInt();
+    nsaddr_t dest_addr = ManetAddress(p->getDestAddress());
 
     ev <<"Node " << OLSR::node_id(ra_addr()) << "MAC Layer detects a breakage on link to "  <<
     OLSR::node_id(dest_addr);
 
-    if (dest_addr == (Uint128)IP_BROADCAST)
+    if (dest_addr == ManetAddress(IPv4Address(IP_BROADCAST)))
     {
         return;
     }
@@ -2746,7 +2763,7 @@ OLSR::emf_to_seconds(uint8_t olsr_format)
 int
 OLSR::node_id(const nsaddr_t &addr)
 {
-    return addr;
+    return addr.getIPv4().getInt();
     /*
         // Preventing a bad use for this function
             if ((uint32_t)addr == IP_BROADCAST)
@@ -2760,11 +2777,7 @@ OLSR::node_id(const nsaddr_t &addr)
 
 const char * OLSR::getNodeId(const nsaddr_t &addr)
 {
-    if (isInMacLayer())
-        return MACAddress(addr.getLo()).str().c_str();
-    else
-        return IPv4Address(addr.getLo()).str().c_str();
-
+    return addr.str().c_str();
 }
 
 // Interfaces with other Inet
@@ -2774,7 +2787,7 @@ void OLSR:: processLinkBreak(const cObject *details)
     {
         if (dynamic_cast<IPv4Datagram *>(const_cast<cObject*>(details)))
         {
-            IPv4Datagram * dgram = check_and_cast<IPv4Datagram *>(details);
+            IPv4Datagram * dgram = const_cast<IPv4Datagram *>(check_and_cast<const IPv4Datagram *>(details));
             mac_failed(dgram);
             return;
         }
@@ -2869,11 +2882,11 @@ OLSR::~OLSR()
 }
 
 
-uint32_t OLSR::getRoute(const Uint128 &dest, std::vector<Uint128> &add)
+uint32_t OLSR::getRoute(const ManetAddress &dest, std::vector<ManetAddress> &add)
 {
     add.clear();
     OLSR_rt_entry* rt_entry = rtable_.lookup(dest);
-    Uint128 apAddr;
+    ManetAddress apAddr;
     if (!rt_entry)
     {
         if (getAp(dest, apAddr))
@@ -2902,12 +2915,12 @@ uint32_t OLSR::getRoute(const Uint128 &dest, std::vector<Uint128> &add)
 }
 
 
-bool OLSR::getNextHop(const Uint128 &dest, Uint128 &add, int &iface, double &cost)
+bool OLSR::getNextHop(const ManetAddress &dest, ManetAddress &add, int &iface, double &cost)
 {
     OLSR_rt_entry* rt_entry = rtable_.lookup(dest);
     if (!rt_entry)
     {
-        Uint128 apAddr;
+        ManetAddress apAddr;
         if (getAp(dest, apAddr))
         {
 
@@ -2924,7 +2937,7 @@ bool OLSR::getNextHop(const Uint128 &dest, Uint128 &add, int &iface, double &cos
 
             InterfaceEntry * ie = getInterfaceWlanByAddress(rt_entry->iface_addr());
             iface = ie->getInterfaceId();
-            cost = rt_entry->route.size();
+            cost = rt_entry->dist();
             return true;
         }
         return false;
@@ -2940,7 +2953,7 @@ bool OLSR::getNextHop(const Uint128 &dest, Uint128 &add, int &iface, double &cos
 
     InterfaceEntry * ie = getInterfaceWlanByAddress(rt_entry->iface_addr());
     iface = ie->getInterfaceId();
-    cost = rt_entry->route.size();
+    cost = rt_entry->dist();
     return true;
 }
 
@@ -2958,7 +2971,7 @@ bool OLSR::isOurType(cPacket * msg)
     return false;
 }
 
-bool OLSR::getDestAddress(cPacket *msg, Uint128 &dest)
+bool OLSR::getDestAddress(cPacket *msg, ManetAddress &dest)
 {
     return false;
 }
@@ -2984,14 +2997,14 @@ void OLSR::scheduleNextEvent()
 
 
 // Group methods, allow the anycast procedure
-int OLSR::getRouteGroup(const AddressGroup &gr, std::vector<Uint128> &add)
+int OLSR::getRouteGroup(const AddressGroup &gr, std::vector<ManetAddress> &add)
 {
 
     int distance = 1000;
     add.clear();
     for (AddressGroupConstIterator it = gr.begin(); it!=gr.end(); it++)
     {
-        Uint128 dest = *it;
+        ManetAddress dest = *it;
         OLSR_rt_entry* rt_entry = rtable_.lookup(dest);
         if (!rt_entry)
             continue;
@@ -3013,13 +3026,13 @@ int OLSR::getRouteGroup(const AddressGroup &gr, std::vector<Uint128> &add)
     return distance;
 }
 
-bool OLSR::getNextHopGroup(const AddressGroup &gr, Uint128 &add, int &iface, Uint128 &gw)
+bool OLSR::getNextHopGroup(const AddressGroup &gr, ManetAddress &add, int &iface, ManetAddress &gw)
 {
 
     int distance = 1000;
     for (AddressGroupConstIterator it = gr.begin(); it!=gr.end(); it++)
     {
-        Uint128 dest = *it;
+        ManetAddress dest = *it;
         OLSR_rt_entry* rt_entry = rtable_.lookup(dest);
         if (!rt_entry)
             continue;
@@ -3046,7 +3059,7 @@ bool OLSR::getNextHopGroup(const AddressGroup &gr, Uint128 &add, int &iface, Uin
 
 
 
-int  OLSR::getRouteGroup(const Uint128& dest, std::vector<Uint128> &add, Uint128& gateway, bool &isGroup, int group)
+int  OLSR::getRouteGroup(const ManetAddress& dest, std::vector<ManetAddress> &add, ManetAddress& gateway, bool &isGroup, int group)
 {
     AddressGroup gr;
     int distance = 0;
@@ -3068,7 +3081,7 @@ int  OLSR::getRouteGroup(const Uint128& dest, std::vector<Uint128> &add, Uint128
     return distance;
 }
 
-bool OLSR::getNextHopGroup(const Uint128& dest, Uint128 &next, int &iface, Uint128& gw, bool &isGroup, int group)
+bool OLSR::getNextHopGroup(const ManetAddress& dest, ManetAddress &next, int &iface, ManetAddress& gw, bool &isGroup, int group)
 {
     AddressGroup gr;
     bool find = false;
@@ -3089,13 +3102,13 @@ bool OLSR::getNextHopGroup(const Uint128& dest, Uint128 &next, int &iface, Uint1
 
 
 
-Uint128 OLSR::getIfaceAddressFromIndex(int index)
+ManetAddress OLSR::getIfaceAddressFromIndex(int index)
 {
     InterfaceEntry * entry = getInterfaceEntry(index);
     if (this->isInMacLayer())
-        return entry->getMacAddress().getInt();
+        return ManetAddress(entry->getMacAddress());
     else
-        return entry->ipv4Data()->getIPAddress().getInt();
+        return ManetAddress(entry->ipv4Data()->getIPAddress());
 }
 
 void OLSR::computeDistributionPath(const nsaddr_t &initNode)
@@ -3150,7 +3163,7 @@ void OLSR::computeDistributionPath(const nsaddr_t &initNode)
     distributionPath[initNode] = route;
 }
 
-void OLSR::getDistributionPath(const Uint128 &addr,std::vector<Uint128> &path)
+void OLSR::getDistributionPath(const ManetAddress &addr,std::vector<ManetAddress> &path)
 {
 
     DistributionPath::iterator it;
@@ -3162,4 +3175,26 @@ void OLSR::getDistributionPath(const Uint128 &addr,std::vector<Uint128> &path)
             opp_error("error in distribution route");
         path = it->second;
     }
+}
+
+
+
+bool
+OLSR::isNodeCandidate(const nsaddr_t &src_addr)
+{
+    double now = CURRENT_TIME;
+
+    // If the sender interface address is not in the symmetric
+    // 1-hop neighborhood the message must not be forwarded
+
+
+    OLSR_link_tuple* link_tuple = state_.find_sym_link_tuple(src_addr, now);
+    if (link_tuple == NULL)
+        return false;
+
+
+    OLSR_mprsel_tuple* mprsel_tuple = state_.find_mprsel_tuple(get_main_addr(src_addr));
+    if (mprsel_tuple != NULL)
+        return true;
+    return false;
 }

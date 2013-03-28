@@ -213,7 +213,6 @@ class INET_API Ieee80211Mac : public WirelessMacBase, public INotifiable
     };
   protected:
     cFSM fsm;
-    bool fixFSM;
 
     struct Edca {
         simtime_t TXOP;
@@ -315,6 +314,9 @@ class INET_API Ieee80211Mac : public WirelessMacBase, public INotifiable
         EDCA,
     };
   protected:
+    // if true MAC sublayer store the frames instead of the management sublayer
+    bool queueMode;
+
     Mode mode;
 
     /** Sequence number to be assigned to the next frame */
@@ -631,8 +633,6 @@ class INET_API Ieee80211Mac : public WirelessMacBase, public INotifiable
     /** @brief Produce a readable name of the given MAC operation mode */
     //@}
     int getTimeout(void);
-    virtual int getMaxBitrate(void);
-    virtual int getMinBitrate(void);
 
     virtual void reportDataOk(void);
     virtual void reportDataFailed(void);
@@ -680,6 +680,21 @@ class INET_API Ieee80211Mac : public WirelessMacBase, public INotifiable
     virtual void promiscousFrame(cMessage *msg);
 
     virtual bool isDuplicated(cMessage *msg);
+
+    virtual void sendNotification(int category, cMessage *pkt)
+    {
+        if (!nb)
+            return;
+        int tempKind = pkt->getKind();
+        pkt->setKind(this->getIndex());
+        nb->fireChangeNotification(category, pkt);
+        pkt->setKind(tempKind);
+    }
+  public:
+    virtual void setQueueModeTrue() {queueMode = true;}
+    virtual void setQueueModeFalse() {queueMode = false;}
+    virtual State getState() {return static_cast<State>(fsm.getState());}
+    virtual unsigned int getQueueSize() {return transmissionQueueSize();}
 };
 
 #endif

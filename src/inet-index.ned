@@ -29,7 +29,7 @@
 //
 // The INET Framework supports wireless and mobile simulations as well.
 //
-// See the <tt><a href="whatsnew.html">WHATSNEW</a></tt> file in the distribution 
+// See the <tt><a href="whatsnew.html">WHATSNEW</a></tt> file in the distribution
 // for the list of recent changes.
 //
 // Introductory material:
@@ -40,8 +40,8 @@
 // A few useful starting points for browsing the documentation:
 //  - example networks: ~BulkTransfer, ~MulticastNetwork,
 //    ~MixedLAN, etc.
-//  - hosts, routers, switches: ~StandardHost, ~Router, ~EtherSwitch, ~EtherHub,
-//    etc.
+//  - hosts, routers, switches and other network level modules:
+//    ~StandardHost, ~Router, ~EtherSwitch, ~EtherHub, ~InternetCloud etc.
 //  - network interfaces: ~EthernetInterface, ~PPPInterface, ~Ieee80211Nic
 //  - <a href="ieee80211.html">IEEE 802.11 models</a>, both ad-hoc and infrastructure
 //    mode are supported
@@ -62,7 +62,8 @@
 //    ~IPv4ControlInfo, ~TCPCommand, ~UDPControlInfo, ~Ieee802Ctrl, etc.
 //  - application models: ~UDPVideoStreamSvr, ~UDPVideoStreamCli, ~UDPBasicApp, ~UDPEchoApp,
 //    ~TCPSessionApp, ~TCPBasicClientApp, ~TCPGenericSrvApp, ~TCPSinkApp,
-//    ~TCPSrvHostApp, ~EtherAppCli, ~EtherAppSrv, ~PingApp, etc.
+//    ~TCPSrvHostApp, ~EtherAppCli, ~EtherAppSrv, ~PingApp, ~SimpleVoIPSender,
+//    ~SimpleVoIPReceiver etc.
 //  - wireless support: ~ChannelControl, ~Ieee80211Nic
 //  - mobility: ~MobileHost; mobility models such as ~TurtleMobility,
 //    ~BonnMotionMobility, ~ANSimMobility, ~RandomWPMobility, ~MassMobility

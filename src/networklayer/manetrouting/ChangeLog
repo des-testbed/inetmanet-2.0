@@ -1,3 +1,13 @@
+2013-01-30  ------ inet-2.1.0 released ------
+
+2012-11-23  Zoltan Bojthe
+
+	ManetRouting: 
+	  - uses now ManetNetworkAddress instead of Uint128
+	  - removed iterator typedefs of the AddressGroup
+	  - merged sendToIp() code into a common base function
+	    sendToIpOnIface()
+
 2012-08-07  ------ inet-2.0.0 released ------
 
 2012-07-08  Rudolf Hornig
@@ -21,6 +31,7 @@
 	Code taken over from the INETMAMNET-2.0 repository.
 	Some IFDEFs were added to make it compile without the
 	80211MESH module which is not present in INET.
+
 2012-03-20  ------ inet-1.99.4 released ------
 
 2012-02-24  ------ inet-1.99.3 released ------

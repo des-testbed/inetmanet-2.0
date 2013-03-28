@@ -1,6 +1,6 @@
 //
 // Copyright (C) 2012 Opensim Ltd.
-// Author: Tamas Borbely 
+// Author: Tamas Borbely
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU Lesser General Public License
@@ -31,7 +31,7 @@ import inet.linklayer.queue.PriorityScheduler;
 module EtherQoSQueue like IOutputQueue
 {
     parameters:
-        string dataQueueType = default("DropTailQueue");  // class that inherits from IOutputQueue (~DropTailQueue, ~DropTailQoSQueue, ~REDQueue)
+        string dataQueueType = default("DropTailQueue");  // class that inherits from IOutputQueue (~DropTailQueue, ~EtherQoSQueue, ~DiffservQueue etc.)
         @display("i=block/queue");
     gates:
         input in;

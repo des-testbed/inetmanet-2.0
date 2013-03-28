@@ -75,7 +75,7 @@ simple Ieee80211Mac
         double TXOP1 @unit(s) = default(0s);
         double TXOP2 @unit(s) = default(3.008ms);
         double TXOP3 @unit(s) = default(1.504ms);
-        // parameters for EDCA = false 
+        // parameters for EDCA = false
         int AIFSN = default(2); // if there is only one AC (EDCA = false)
 
         bool useModulationParameters = default(false); // if true, slot time, DIFS, and ACK timeout (aPHY-RX-START-Delay) are function of modulation time (2007 standard)
@@ -86,14 +86,13 @@ simple Ieee80211Mac
         string wifiPreambleMode @enum("LONG","SHORT") = default("LONG"); // preamble mode; see IEEE 2007, 19.3.2
 
         double basicBitrate @unit("bps") = default(2e6bps);
-        int mtu @unit("B") = default(1500B);
+        int mtu @unit("B") = default(2304B);
         double slotTime @unit("s") = default(9us);
         int rtsThresholdBytes @unit("B") = default(2346B); // longer messages will be sent using RTS/CTS
         int retryLimit = default(-1); // maximum number of retries per message, -1 means default
         int cwMinData = default(-1); // contention window for normal data frames, -1 means default
         int cwMaxData = default(-1); // contention window for normal data frames, -1 means default
         int cwMinMulticast = default(-1); // contention window for broadcast messages, -1 means default
-        bool fixFSM = default(true);
 
         double phyHeaderLength = default(-1); // if -1, the MAC will compute it in function of the modulation type
         bool forceBitRate = default(false); // if true, the MAC will force the bitrate to the physical layer

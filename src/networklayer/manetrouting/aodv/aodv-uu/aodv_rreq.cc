@@ -133,7 +133,7 @@ void NS_CLASS rreq_send(struct in_addr dest_addr, u_int32_t dest_seqno,
     RREQ *rreq;
     struct in_addr dest;
     int i;
-    dest.s_addr = AODV_BROADCAST;
+    dest.s_addr = ManetAddress(IPv4Address(AODV_BROADCAST));
     /* Check if we should force the gratuitous flag... (-g option). */
     if (rreq_gratuitous)
         flags |= RREQ_GRATUITOUS;
@@ -167,7 +167,7 @@ void NS_CLASS rreq_forward(RREQ * rreq, int size, int ttl)
     struct in_addr dest, orig;
     int i;
 
-    dest.s_addr = AODV_BROADCAST;
+    dest.s_addr = ManetAddress(IPv4Address(AODV_BROADCAST));
     orig.s_addr = rreq->orig_addr;
 
     /* FORWARD the RREQ if the TTL allows it. */
@@ -195,6 +195,8 @@ void NS_CLASS rreq_forward(RREQ * rreq, int size, int ttl)
     double delay = -1;
     if (par("EqualDelay"))
         delay = par("broadcastDelay");
+//    if (storeRreq) // in this case the delay was at the packet input
+//        delay = 0;
 
     for (i = 0; i < MAX_NR_INTERFACES; i++)
     {
@@ -221,11 +223,10 @@ void NS_CLASS rreq_process(RREQ * rreq, int rreqlen, struct in_addr ip_src,
     u_int32_t rreq_id, rreq_new_hcnt, life;
     unsigned int extlen = 0;
     struct in_addr rreq_dest, rreq_orig;
-    unsigned int ifaddr;
     uint32_t cost;
     uint8_t  hopfix;
 
-    Uint128 aux;
+    ManetAddress aux;
     if (getAp(rreq->dest_addr, aux) && !isBroadcast(rreq->dest_addr))
     {
         rreq_dest.s_addr = aux;
@@ -248,12 +249,10 @@ void NS_CLASS rreq_process(RREQ * rreq, int rreqlen, struct in_addr ip_src,
     if (this->isStaticNode())
         hopfix++;
 
-
-
     /* Ignore RREQ's that originated from this node. Either we do this
        or we buffer our own sent RREQ's as we do with others we
        receive. */
-    ifaddr = DEV_IFINDEX(ifindex).ipaddr.s_addr;
+
 #ifndef OMNETPP
     if (rreq_orig.s_addr == DEV_IFINDEX(ifindex).ipaddr.s_addr)
         return;
@@ -447,6 +446,7 @@ void NS_CLASS rreq_process(RREQ * rreq, int rreqlen, struct in_addr ip_src,
             rrep = rrep_create(0, 0, 0, DEV_IFINDEX(rev_rt->ifindex).ipaddr,
                                this_host.seqno, rev_rt->dest_addr,
                                ACTIVE_ROUTE_TIMEOUT);
+            rrep->totalHops =  rev_rt->hcnt;
 
             ext = rrep_add_ext(rrep, RREP_INET_DEST_EXT, rrep_size,
                                sizeof(struct in_addr), (char *) &rreq_dest);
@@ -492,7 +492,8 @@ void NS_CLASS rreq_process(RREQ * rreq, int rreqlen, struct in_addr ip_src,
                   "Responding for INTERNET dest: %s rrep_size=%d",
                   ip_to_str(rreq_dest), rrep_size);
 
-            rrep_send(rrep, rev_rt, NULL, rrep_size);
+            if (checkRrep)
+                 rrep_send(rrep, rev_rt, NULL, rrep_size, par ("unicastDelay").doubleValue());
 
             return;
 
@@ -508,7 +509,6 @@ void NS_CLASS rreq_process(RREQ * rreq, int rreqlen, struct in_addr ip_src,
     if (isLocalAddress (rreq_dest.s_addr))
     {
 #endif
-
         /* WE are the RREQ DESTINATION. Update the node's own
            sequence number to the maximum of the current seqno and the
            one in the RREQ. */
@@ -522,6 +522,7 @@ void NS_CLASS rreq_process(RREQ * rreq, int rreqlen, struct in_addr ip_src,
         rrep = rrep_create(0, 0, 0, DEV_IFINDEX(rev_rt->ifindex).ipaddr,
                            this_host.seqno, rev_rt->dest_addr,
                            MY_ROUTE_TIMEOUT);
+        rrep->totalHops =  rev_rt->hcnt;
 #ifdef OMNETPP
         EV << " create a rrep" << convertAddressToString(DEV_IFINDEX(rev_rt->ifindex).ipaddr.s_addr) << "seq n" << this_host.seqno << " to " << convertAddressToString(rev_rt->dest_addr.s_addr) << "\n";
 #endif
@@ -541,6 +542,7 @@ void NS_CLASS rreq_process(RREQ * rreq, int rreqlen, struct in_addr ip_src,
            one in the RREQ. */
         seqno_incr(this_host.seqno);
         rrep = rrep_create(0, 0, 0, DEV_IFINDEX(rev_rt->ifindex).ipaddr,this_host.seqno, rev_rt->dest_addr, MY_ROUTE_TIMEOUT);
+        rrep->totalHops =  rev_rt->hcnt;
         EV << "Create a rrep" << convertAddressToString(DEV_IFINDEX(rev_rt->ifindex).ipaddr.s_addr) << "seq n" << this_host.seqno << " to " << convertAddressToString(rev_rt->dest_addr.s_addr) << "\n";
         rrep_send(rrep, rev_rt, NULL, RREP_SIZE);
         if (ip_ttl > 0)
@@ -558,9 +560,10 @@ void NS_CLASS rreq_process(RREQ * rreq, int rreqlen, struct in_addr ip_src,
     {
         /* We are an INTERMEDIATE node. - check if we have an active
          * route entry */
-
+#ifdef OMNETPP
+        actualizeTablesWithCollaborative(rreq_dest.s_addr);
+#endif
         fwd_rt = rt_table_find(rreq_dest);
-
 
         if (fwd_rt && (fwd_rt->state == VALID || fwd_rt->state == IMMORTAL) && !rreq->d)
         {
@@ -591,6 +594,7 @@ void NS_CLASS rreq_process(RREQ * rreq, int rreqlen, struct in_addr ip_src,
                 rrep = rrep_create(0, 0, gw_rt->hcnt, gw_rt->dest_addr,
                                    gw_rt->dest_seqno, rev_rt->dest_addr,
                                    lifetime);
+                rrep->totalHops =  rev_rt->hcnt;
 
                 ext = rrep_add_ext(rrep, RREP_INET_DEST_EXT, rrep_size,
                                    sizeof(struct in_addr), (char *) &rreq_dest);
@@ -601,6 +605,7 @@ void NS_CLASS rreq_process(RREQ * rreq, int rreqlen, struct in_addr ip_src,
                       "Intermediate node response for INTERNET dest: %s rrep_size=%d",
                       ip_to_str(rreq_dest), rrep_size);
 
+                // clean entry
                 rrep_send(rrep, rev_rt, gw_rt, rrep_size);
                 return;
             }
@@ -633,6 +638,8 @@ void NS_CLASS rreq_process(RREQ * rreq, int rreqlen, struct in_addr ip_src,
                 rrep = rrep_create(0, 0, fwd_rt->hcnt, fwd_rt->dest_addr,
                                    fwd_rt->dest_seqno, rev_rt->dest_addr,
                                    lifetime);
+                rrep->totalHops =  rev_rt->hcnt + fwd_rt->hcnt;
+
                 rrep_send(rrep, rev_rt, fwd_rt, rrep_size);
                 /* If the GRATUITOUS flag is set, we must also unicast a
                    gratuitous RREP to the destination. */
@@ -641,6 +648,7 @@ void NS_CLASS rreq_process(RREQ * rreq, int rreqlen, struct in_addr ip_src,
                     rrep = rrep_create(0, 0, rev_rt->hcnt, rev_rt->dest_addr,
                                        rev_rt->dest_seqno, fwd_rt->dest_addr,
                                        lifetime);
+                    rrep->totalHops =  rev_rt->hcnt + fwd_rt->hcnt;
                     rrep_send(rrep, fwd_rt, rev_rt, RREP_SIZE);
                     DEBUG(LOG_INFO, 0, "Sending G-RREP to %s with rte to %s",
                           ip_to_str(rreq_dest), ip_to_str(rreq_orig));
@@ -668,29 +676,6 @@ void NS_CLASS rreq_process(RREQ * rreq, int rreqlen, struct in_addr ip_src,
                         return;
             */
         }
-#ifdef OMNETPP
-        // collaborative protocol
-        if (getCollaborativeProtocol())
-        {
-            struct in_addr next_hop;
-            int iface;
-            double cost;
-            if (getCollaborativeProtocol()->getNextHop(rreq_dest.s_addr,next_hop.s_addr,iface,cost))
-            {
-
-                u_int8_t hops = cost;
-                std::map<Uint128,u_int32_t *>::iterator it =  mapSeqNum.find(rreq_dest.s_addr);
-                if (it == mapSeqNum.end())
-                    opp_error("node not found in mapSeqNum");
-                u_int32_t sqnum = *(it->second);
-
-                rrep = rrep_create(0, 0, hops, rreq_dest , sqnum, rev_rt->dest_addr, MY_ROUTE_TIMEOUT);
-                rrep_send(rrep, rev_rt, NULL, rrep_size);
-                return;
-            }
-        }
-
-#endif
 
 forward:
 #ifndef OMNETPP
@@ -825,7 +810,7 @@ void NS_CLASS rreq_local_repair(rt_table_t * rt, struct in_addr src_addr,
     src_entry = rt_table_find(src_addr);
 
     if (src_entry)
-        ttl = (int) (max(rt->hcnt, 0.5 * src_entry->hcnt) + LOCAL_ADD_TTL);
+        ttl = (int) (maxMacro(rt->hcnt, 0.5 * src_entry->hcnt) + LOCAL_ADD_TTL);
     else
         ttl = rt->hcnt + LOCAL_ADD_TTL;
 
@@ -869,9 +854,9 @@ void NS_CLASS  rreq_proactive (void *arg)
     if (!isRoot)
          return;
     if (this->isInMacLayer())
-         dest.s_addr= MACAddress::BROADCAST_ADDRESS.getInt();
+         dest.s_addr= ManetAddress(MACAddress::BROADCAST_ADDRESS);
     else
-         dest.s_addr= IPv4Address::ALLONES_ADDRESS.getInt();
+         dest.s_addr= ManetAddress(IPv4Address::ALLONES_ADDRESS);
     rreq_send(dest,0,NET_DIAMETER, RREQ_DEST_ONLY);
     timer_set_timeout(&proactive_rreq_timer, proactive_rreq_timeout);
 }

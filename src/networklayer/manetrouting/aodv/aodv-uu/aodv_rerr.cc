@@ -90,7 +90,7 @@ void NS_CLASS rerr_process(RERR * rerr, int rerrlen,struct in_addr ip_src,
     int i;
     int numInterfaces;
 
-    rerr_unicast_dest.s_addr = 0;
+    rerr_unicast_dest.s_addr = ManetAddress::ZERO;
 
     DEBUG(LOG_DEBUG, 0, "ip_src=%s", ip_to_str(ip_src));
 
@@ -148,6 +148,18 @@ void NS_CLASS rerr_process(RERR * rerr, int rerrlen,struct in_addr ip_src,
             {
                 rt_table_invalidate(rt);
             }
+#ifdef OMNETPP
+            else
+            {
+                if (rt->nprec == 0 && par("RRERFoceDiscover").boolValue() && rt->next_hop.S_addr == ip_src.S_addr)
+                {
+                    u_int8_t rreq_flags = 0;
+                    if (par("targetOnlyRreq").boolValue())
+                        rreq_flags |= RREQ_DEST_ONLY;
+                    rreq_route_discovery(udest_addr, rreq_flags, NULL);
+                }
+            }
+#endif
             /* (a) updates the corresponding destination sequence number
              *         with the Destination Sequence Number in the packet, and */
             rt->dest_seqno = rerr_dest_seqno;
@@ -188,14 +200,14 @@ void NS_CLASS rerr_process(RERR * rerr, int rerrlen,struct in_addr ip_src,
                           ip_to_str(rt->dest_addr), rt->dest_seqno);
 
 #ifdef AODV_USE_STL_RT
-                    if (rerr_unicast_dest.s_addr)
+                    if (rerr_unicast_dest.s_addr.isUnspecified())
                     {
                         for (unsigned int i = 0; i< rt->precursors.size(); i++)
                         {
                             precursor_t *pr = & rt->precursors[i];
                             if (pr->neighbor.s_addr != rerr_unicast_dest.s_addr)
                             {
-                                rerr_unicast_dest.s_addr = 0;
+                                rerr_unicast_dest.s_addr = ManetAddress::ZERO;
                                 break;
                             }
                         }
@@ -245,7 +257,7 @@ void NS_CLASS rerr_process(RERR * rerr, int rerrlen,struct in_addr ip_src,
         rt = rt_table_find(rerr_unicast_dest);
         new_rerr->ttl=1;
 
-        if (rt && new_rerr->dest_count == 1 && rerr_unicast_dest.s_addr!=0)
+        if (rt && new_rerr->dest_count == 1 && !rerr_unicast_dest.s_addr.isUnspecified())
             aodv_socket_send((AODV_msg *) new_rerr,
                              rerr_unicast_dest,
                              RERR_CALC_SIZE(new_rerr), 1,
@@ -269,7 +281,7 @@ void NS_CLASS rerr_process(RERR * rerr, int rerrlen,struct in_addr ip_src,
 
                 if (!DEV_NR(i).enabled)
                     continue;
-                dest.s_addr = AODV_BROADCAST;
+                dest.s_addr = ManetAddress(IPv4Address(AODV_BROADCAST));
 #ifdef OMNETPP
                 if (numInterfaces>1)
                 {

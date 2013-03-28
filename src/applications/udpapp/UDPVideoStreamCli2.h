@@ -47,6 +47,17 @@ class INET_API UDPVideoStreamCli2 : public cSimpleModule
     double limitDelay;
     int numRecPackets;
 
+    uint32_t numPframes;
+    uint32_t numIframes;
+    uint32_t numBframes;
+    uint64_t totalBytesI;
+    uint64_t totalBytesP;
+    uint64_t totalBytesB;
+    int64_t lastSeqNum;
+
+    bool recieved;
+
+
   public:
     UDPVideoStreamCli2();
     virtual ~UDPVideoStreamCli2();

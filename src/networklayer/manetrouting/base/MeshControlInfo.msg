@@ -19,12 +19,11 @@
 
 cplusplus {{
 #include "Ieee802Ctrl_m.h"
-#include "uint128.h"
 }}
 
 
 class noncobject Ieee802Ctrl;
-class noncobject Uint128;
+class noncobject ManetAddress;
 
 //
 // Control structure for communication between LLC and higher layers
@@ -34,5 +33,6 @@ class MeshControlInfo extends Ieee802Ctrl
 // Mesh modifications
     int inputId;     // used in Mesh network with several mac interfaces
     bool previousFix; // Used to indicate if the previous node is fix
-    Uint128 vectorAddress[]; // Used to store the route find by proactive routing protocol
+    int maxHopCollaborative;
+    bool collaborativeFeedback;   
 }

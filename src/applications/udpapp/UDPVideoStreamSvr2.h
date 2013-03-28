@@ -28,6 +28,7 @@
 
 #include "INETDefs.h"
 #include "UDPSocket.h"
+#include <deque>
 
 
 /**
@@ -51,10 +52,31 @@ class INET_API UDPVideoStreamSvr2 : public cSimpleModule
         long bytesLeft;           ///< bytes left to transmit
         long numPkSent;           ///< number of packets sent
         simtime_t stopTime;       ///< stop connection
+        bool fileTrace;
+        unsigned int traceIndex;
+        simtime_t timeInit;
+    };
+
+    struct VideoInfo
+    {
+            simtime_t timeFrame;
+            uint32_t seqNum;
+            char type;
+            uint32_t size;
     };
 
   protected:
     typedef std::vector<VideoStreamData *> VideoStreamVector;
+    typedef std::deque<VideoInfo> VideoTrace;
+    VideoTrace trace;
+
+    VideoStreamData *videoBroadcastStream;
+    cMessage * restartVideoBroadcast;
+    int outputInterfaceBroadcast;
+    bool macroPackets;
+    uint64_t maxSizeMacro;
+    simtime_t initTime;
+
     VideoStreamVector streamVector;
     UDPSocket socket;
 
@@ -77,6 +99,13 @@ class INET_API UDPVideoStreamSvr2 : public cSimpleModule
 
     // send a packet of the given video stream
     virtual void sendStreamData(cMessage *timer);
+
+    // parse utexas video traces
+    virtual void fileParser(const char *fileName);
+
+    // begin a broadcast sequence
+    virtual void broadcastVideo();
+    virtual int broadcastInterface();
 
   public:
     UDPVideoStreamSvr2();

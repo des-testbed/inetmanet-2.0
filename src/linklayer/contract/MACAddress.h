@@ -27,8 +27,8 @@
 #define MAC_ADDRESS_SIZE 6
 #define MAC_ADDRESS_SIZE64 8
 
-#define MAC_ADDRESS_MASK 0xffffffffffffL
-#define MAC_ADDRESS_MASK64 0xffffffffffffffffL
+#define MAC_ADDRESS_MASK 0xffffffffffffULL
+#define MAC_ADDRESS_MASK64 0xffffffffffffffffULL
 
 
 
@@ -68,7 +68,7 @@ class INET_API MACAddress
     /**
      * Initializes the address from a 48-bit integer
      */
-    MACAddress(uint64 bits)
+    explicit MACAddress(uint64 bits)
     {
         if (bits & !MAC_ADDRESS_MASK)
             macAddress64 = true;

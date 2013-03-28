@@ -58,6 +58,7 @@
 #define AODV_GLOBAL_STATISTISTIC
 
 /* Global definitions and lib functions */
+#include <deque>
 #include "aodv-uu/params.h"
 #include "aodv-uu/defs_aodv.h"
 
@@ -65,11 +66,11 @@
 /* Needed by some network-related datatypes */
 #include "ManetRoutingBase.h"
 #include "aodv-uu/list.h"
-#include "aodv_msg_struct.h"
+
 #include "ICMPAccess.h"
 #include "Ieee80211Frame_m.h"
 
-
+#include "aodv_msg_struct.h"
 /* Forward declaration needed to be able to reference the class */
 class AODVUU;
 
@@ -126,39 +127,122 @@ class AODVUU : public ManetRoutingBase
     bool propagateProactive;
     struct timer proactive_rreq_timer;
     long proactive_rreq_timeout;
-    bool isBroadcast (Uint128 add)
+    bool isBroadcast (ManetAddress add)
     {
-        if (this->isInMacLayer() && add==MACAddress::BROADCAST_ADDRESS.getInt())
+        if (this->isInMacLayer() && add==ManetAddress(MACAddress::BROADCAST_ADDRESS))
              return true;
-        if (!this->isInMacLayer() && add==IPv4Address::ALLONES_ADDRESS.getInt())
-        	return true;
+        if (!this->isInMacLayer() && add==ManetAddress(IPv4Address::ALLONES_ADDRESS))
+            return true;
         return false;
     }
     // cMessage  messageEvent;
     typedef std::multimap<simtime_t, struct timer*> AodvTimerMap;
     AodvTimerMap aodvTimerMap;
-    typedef std::map<Uint128, struct rt_table*> AodvRtTableMap;
+    typedef std::map<ManetAddress, struct rt_table*> AodvRtTableMap;
     AodvRtTableMap aodvRtTableMap;
 
     // this static map simulate the exchange of seq num by the proactive protocol.
-    static std::map<Uint128,u_int32_t *> mapSeqNum;
+    static std::map<ManetAddress,u_int32_t *> mapSeqNum;
 
+
+  private:
+    class PacketDestOrigin
+    {
+        private:
+            ManetAddress dest;
+            ManetAddress origin;
+        public:
+            PacketDestOrigin() {}
+            PacketDestOrigin(const ManetAddress &s,const ManetAddress &o)
+            {
+                dest = s;
+                origin = o;
+            }
+            ManetAddress getDest() {return dest;}
+            void setDests(const ManetAddress & s) {dest = s;}
+            ManetAddress getOrigin() {return origin;}
+            void setOrigin(const ManetAddress & s) {origin = s;}
+
+            inline bool operator<(const PacketDestOrigin& b) const
+            {
+                if (dest != b.dest)
+                    return dest < b.dest;
+                else
+                    return origin < b.origin;
+            }
+            inline bool operator == (const PacketDestOrigin& b) const
+            {
+                if (dest == b.dest && origin == b.origin)
+                    return true;
+                else
+                    return false;
+            }
+            PacketDestOrigin& operator=(const PacketDestOrigin& a)
+            {
+                dest = a.dest; origin = a.origin; return *this;
+            }
+    };
+
+    struct RREPProcessed
+    {
+        u_int8_t hcnt;
+        u_int8_t totalHops;
+        u_int32_t dest_seqno;
+        u_int32_t origin_seqno;
+        uint32_t cost;
+        uint8_t  hopfix;
+        ManetAddress next;
+    };
+
+    struct RREQInfo
+    {
+        u_int8_t hcnt;
+        u_int32_t dest_seqno;
+        u_int32_t origin_seqno;
+        uint32_t cost;
+        uint8_t  hopfix;
+        cPacket *pkt;
+    };
+
+    struct RREQProcessed : cMessage
+    {
+        PacketDestOrigin destOrigin;
+        std::deque<RREQInfo> infoList;
+    };
+
+    std::map<PacketDestOrigin,RREPProcessed> rrepProc;
+    std::map<PacketDestOrigin,RREQProcessed*> rreqProc;
+
+    struct DelayInfo : public cObject
+    {
+        struct in_addr dst;
+        int len;
+        u_int8_t ttl;
+        struct dev_info *dev;
+    };
+    bool storeRreq;
+    bool checkRrep;
+    virtual bool isThisRrepPrevSent(cMessage *);
+    virtual bool getDestAddressRreq(cPacket *msg,PacketDestOrigin &orgDest,RREQInfo &rreqInfo);
   public:
     static int  log_file_fd;
     static bool log_file_fd_init;
-    AODVUU() {isRoot = false; is_init = false; log_file_fd_init = false; sendMessageEvent = new cMessage(); mapSeqNum.clear(); /*&messageEvent;*/}
+    AODVUU() {isRoot = false; is_init = false; log_file_fd_init = false; sendMessageEvent = new cMessage(); mapSeqNum.clear(); /*&messageEvent;*/storeRreq = false;}
     ~AODVUU();
+
+    void actualizeTablesWithCollaborative(const ManetAddress &);
 
     void packetFailed(IPv4Datagram *p);
     void packetFailedMac(Ieee80211DataFrame *);
 
     // Routing information access
-    virtual uint32_t getRoute(const Uint128 &,std::vector<Uint128> &);
-    virtual bool getNextHop(const Uint128 &,Uint128 &add,int &iface,double &);
+    virtual bool supportGetRoute() {return false;}
+    virtual uint32_t getRoute(const ManetAddress &,std::vector<ManetAddress> &);
+    virtual bool getNextHop(const ManetAddress &,ManetAddress &add,int &iface,double &);
     virtual bool isProactive();
-    virtual void setRefreshRoute(const Uint128 &destination, const Uint128 & nextHop,bool isReverse);
-    virtual bool setRoute(const Uint128 & destination,const Uint128 &nextHop,const int &ifaceIndex,const int &hops,const Uint128 &mask=(Uint128)0);
-    virtual bool setRoute(const Uint128 & destination,const Uint128 &nextHop,const char *ifaceName,const int &hops,const Uint128 &mask=(Uint128)0);
+    virtual void setRefreshRoute(const ManetAddress &destination, const ManetAddress & nextHop,bool isReverse);
+    virtual bool setRoute(const ManetAddress & destination, const ManetAddress &nextHop, const int &ifaceIndex,const int &hops, const ManetAddress &mask=ManetAddress::ZERO);
+    virtual bool setRoute(const ManetAddress & destination, const ManetAddress &nextHop, const char *ifaceName,const int &hops, const ManetAddress &mask=ManetAddress::ZERO);
 
   protected:
     bool is_init;
@@ -183,6 +267,7 @@ class AODVUU : public ManetRoutingBase
 
     void recvAODVUUPacket(cMessage * p);
     void processPacket(IPv4Datagram *,unsigned int);
+    void processMacPacket(cPacket * p, const ManetAddress &dest, const ManetAddress &src, int ifindex);
 
     int initialized;
     int  node_id;
@@ -280,8 +365,8 @@ class AODVUU : public ManetRoutingBase
 #define TQ this->timeList
 #else
     typedef std::vector <rreq_record *>RreqRecords;
-    typedef std::map <Uint128, struct blacklist *>RreqBlacklist;
-    typedef std::map <Uint128, seek_list_t*>SeekHead;
+    typedef std::map <ManetAddress, struct blacklist *>RreqBlacklist;
+    typedef std::map <ManetAddress, seek_list_t*>SeekHead;
 
     RreqRecords rreq_records;
     RreqBlacklist rreq_blacklist;
@@ -325,12 +410,12 @@ class AODVUU : public ManetRoutingBase
     int totalRerrSend;
     int totalRerrRec;
 #endif
-// used for break link notification
-    //virtual void processPromiscuous(const cObject *details){};
+    virtual void processPromiscuous(const cObject *details);
+    // used for break link notification
     virtual void processLinkBreak(const cObject *details);
     //virtual void processFullPromiscuous(const cObject *details){}
     virtual bool isOurType(cPacket *);
-    virtual bool getDestAddress(cPacket *,Uint128 &);
+    virtual bool getDestAddress(cPacket *,ManetAddress &);
 
 
 };
