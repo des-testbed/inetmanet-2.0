@@ -119,6 +119,9 @@ void Radio::initialize(int stage)
         std::string propModel = getChannelControlPar("propagationModel").stdstringValue();
         if (propModel == "")
             propModel = "FreeSpaceModel";
+        doubleRayCoverage = false;
+        if (propModel == "TwoRayGroundModel")
+            doubleRayCoverage = true;
 
         receptionModel = (IReceptionModel *) createOne(propModel.c_str());
         receptionModel->initializeFrom(this);
@@ -853,30 +856,19 @@ void Radio::setRadioState(RadioState::State newState)
     if (rs.getState() != newState)
     {
         emit(radioStateSignal, newState);
-        if (rs.getState() != newState)
+        if (newState == RadioState::SLEEP)
         {
-            emit(radioStateSignal, newState);
-            if (newState == RadioState::SLEEP)
-            {
-                disconnectTransceiver();
-                disconnectReceiver();
-            }
-            else if (rs.getState() == RadioState::SLEEP)
-            {
-                connectTransceiver();
-                connectReceiver(); // the connection change the state
-                if (rs.getState() == newState)
-                {
-                    rs.setState(newState);
-                    nb->fireChangeNotification(NF_RADIOSTATE_CHANGED, &rs);
-                    return;
-                }
-            }
+            disconnectTransceiver();
+            disconnectReceiver();
         }
+        else if (rs.getState() == RadioState::SLEEP)
+        {
+            connectTransceiver();
+            connectReceiver(); // the connection change the state
+        }
+        rs.setState(newState);
+        nb->fireChangeNotification(NF_RADIOSTATE_CHANGED, &rs);
     }
-
-    rs.setState(newState);
-    nb->fireChangeNotification(NF_RADIOSTATE_CHANGED, &rs);
 }
 /*
 void Radio::updateSensitivity(double rate)
@@ -972,8 +964,10 @@ void Radio::updateDisplayString() {
         d.setTagArg("r1", 2, "gray");
         d.removeTag("r2");
         d.insertTag("r2");
-        d.setTagArg("r2", 0, (long) calcDistFreeSpace());
-        //d.setTagArg("r2", 0, (long) calcDistDoubleRay());
+        if (doubleRayCoverage)
+            d.setTagArg("r2", 0, (long) calcDistDoubleRay());
+        else
+            d.setTagArg("r2", 0, (long) calcDistFreeSpace());
         d.setTagArg("r2", 2, "blue");
     }
     if (updateString==NULL && updateStringInterval>0)
