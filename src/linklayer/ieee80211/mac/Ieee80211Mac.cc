@@ -355,7 +355,7 @@ void Ieee80211Mac::initialize(int stage)
         numCollision = 0;
         numInternalCollision = 0;
         numReceived = 0;
-        numSentMulticast = -1; //sorin
+        numSentMulticast = 0; //sorin
         numReceivedMulticast = 0;
         numBites = 0;
         numSentTXOP = 0;
@@ -1012,8 +1012,11 @@ void Ieee80211Mac::handleWithFSM(cMessage *msg)
             FSMA_No_Event_Transition(Immediate-Data-Ready,
                                      !transmissionQueueEmpty(),
                                      DEFER,
+                                     /* Mohamad Sbeiti report that this is erroneous, remove these lines in the future
+                                      * maintain now only for to let constancy of the problem
                                      if (retryCounter() == 0) //  jesjones patch.  TODO: check this particular case, I haven't been sure about this particular case
                                         invalidateBackoffPeriod();
+                                        */
                                     );
             FSMA_Event_Transition(Receive,
                                   isLowerMsg(msg),
@@ -1235,6 +1238,29 @@ void Ieee80211Mac::handleWithFSM(cMessage *msg)
                                   if (endTXOP->isScheduled()) cancelEvent(endTXOP);
                                  );
 #endif
+            FSMA_Event_Transition(Receive-ACK-TXOP-Empty,
+                                  isLowerMsg(msg) && isForUs(frame) && frameType == ST_ACK && txop && transmissionQueue(oldcurrentAC)->size() == 1,
+                                  DEFER,
+                                  currentAC = oldcurrentAC;
+                                  if (retryCounter() == 0) numSentWithoutRetry()++;
+                                  numSent()++;
+                                  fr = getCurrentTransmission();
+                                  numBites += fr->getBitLength();
+                                  bites() += fr->getBitLength();
+                                  numFramesOverTxOp--;
+                                  macDelay()->record(simTime() - fr->getMACArrive());
+                                  if (maxjitter() == 0 || maxjitter() < (simTime() - fr->getMACArrive()))
+                                      maxjitter() = simTime() - fr->getMACArrive();
+                                  if (minjitter() == 0 || minjitter() > (simTime() - fr->getMACArrive()))
+                                      minjitter() = simTime() - fr->getMACArrive();
+                                  EV << "record macDelay AC" << currentAC << " value " << simTime() - fr->getMACArrive() <<endl;
+                                  numSentTXOP++;
+                                  cancelTimeoutPeriod();
+                                  finishCurrentTransmission();
+                                  resetCurrentBackOff();
+                                  txop = false;
+                                  if (endTXOP->isScheduled()) cancelEvent(endTXOP);
+                                  );
             FSMA_Event_Transition(Receive-ACK-TXOP,
                                   isLowerMsg(msg) && isForUs(frame) && frameType == ST_ACK && txop,
                                   WAITSIFS,
@@ -1244,6 +1270,7 @@ void Ieee80211Mac::handleWithFSM(cMessage *msg)
                                   fr = getCurrentTransmission();
                                   numBites += fr->getBitLength();
                                   bites() += fr->getBitLength();
+                                  numFramesOverTxOp--;
 
 
                                   macDelay()->record(simTime() - fr->getMACArrive());
@@ -1881,6 +1908,7 @@ void Ieee80211Mac::sendDataFrame(Ieee80211DataOrMgmtFrame *frameToSend)
     {
         //we start packet burst within TXOP time period
         txop = true;
+        numFramesOverTxOp = 0;
 
         for (frame=dynamic_cast<Ieee80211DataOrMgmtFrame*>(transmissionQueue()->initIterator()); frame!=NULL; frame=dynamic_cast<Ieee80211DataOrMgmtFrame*>(transmissionQueue()->next()))
         {
@@ -1890,6 +1918,7 @@ void Ieee80211Mac::sendDataFrame(Ieee80211DataOrMgmtFrame *frameToSend)
             if (TXOP()>time+t)
             {
                 time += t;
+                numFramesOverTxOp++;
                 EV << "adding t \n";
             }
             else
@@ -1918,7 +1947,7 @@ void Ieee80211Mac::sendDataFrame(Ieee80211DataOrMgmtFrame *frameToSend)
     {
         //we start packet burst within TXOP time period
         txop = true;
-
+        numFramesOverTxOp = 0;
         for (frame=transmissionQueue()->begin(); frame != transmissionQueue()->end(); ++frame)
         {
             count++;
@@ -1927,6 +1956,7 @@ void Ieee80211Mac::sendDataFrame(Ieee80211DataOrMgmtFrame *frameToSend)
             if (TXOP()>time+t)
             {
                 time += t;
+                numFramesOverTxOp++;
                 EV << "adding t \n";
             }
             else
@@ -1991,7 +2021,7 @@ Ieee80211DataOrMgmtFrame *Ieee80211Mac::buildDataFrame(Ieee80211DataOrMgmtFrame 
         frame->setDuration(0);
     else if (!frameToSend->getMoreFragments())
     {
-        if (txop)
+        if (txop && transmissionQueue()->size() > 1)
 
         {
 #ifdef  USEMULTIQUEUE
