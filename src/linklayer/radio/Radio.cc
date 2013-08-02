@@ -276,7 +276,8 @@ void Radio::handleMessage(cMessage *msg)
         // must be an AirFrame
             AirFrame *airframe = (AirFrame *) msg;
             handleLowerMsgStart(airframe);
-            bufferMsg(airframe);
+            if (this->isEnabled()) // could have been deactivated in handleLowerMsgStart (i.e. when energy has been depleted)
+                bufferMsg(airframe);
         }
         else
         {
@@ -984,6 +985,7 @@ void Radio::enablingInitialization() {
 }
 
 void Radio::disablingInitialization() {
+    rs.setState(RadioState::SLEEP);
     this->disconnectReceiver();
     this->disconnectTransceiver();
 }
@@ -1047,9 +1049,12 @@ void Radio::disconnectReceiver()
    for (RecvBuff::iterator it = recvBuff.begin(); it!=recvBuff.end(); ++it)
    {
         AirFrame *airframe = it->first;
-        cMessage *endRxTimer = (cMessage *)airframe->getContextPointer();
+        cMessage *endRxTimer = dynamic_cast<cMessage*>((cMessage*) airframe->getContextPointer());
+        if (endRxTimer != NULL) {
+            cancelAndDelete(endRxTimer);
+        }
+
         delete airframe;
-        delete cancelEvent(endRxTimer);
     }
     recvBuff.clear();
 
