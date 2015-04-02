@@ -351,7 +351,7 @@ void ManetRoutingBase::registerRoutingModule()
             data.isProactive = isProactive();
             data.routesVector = routesVector;
             vect.push_back(data);
-            globalRouteMap->insert(std::make_pair<ManetAddress,ProtocolsRoutes>(getAddress(),vect));
+            globalRouteMap->insert(std::make_pair(getAddress(),vect));
         }
         else
         {
@@ -1821,7 +1821,7 @@ void ManetRoutingBase::setRouteInternalStorege(const ManetAddress &dest, const M
                  it->second = next;
          }
          else
-             routesVector->insert(std::make_pair<ManetAddress,ManetAddress>(dest, next));
+             routesVector->insert(std::make_pair(dest, next));
      }
 }
 
